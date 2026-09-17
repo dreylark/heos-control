@@ -1,0 +1,1644 @@
+openapi: 3.1.0
+info:
+  title: HEOS control service
+  version: 0.9.3
+  license:
+    name: MIT
+    identifier: MIT
+  description: |
+    Observe configured HEOS players, browse allowed local media, and submit
+    durable playback operations with optional volume ramps and automatic stop.
+
+    ## Authentication
+    Enter your machine token under **Authentication → Bearer Token**. Requests use
+    `Authorization: Bearer <token>`. Scopes are additive: `read` allows
+    observation and preflight, `control` allows direct volume/mute/transport,
+    and `operator` allows playback and operator stop. Every request also needs
+    a grant for its player; `operator` does not imply `read` or `control`.
+    Health probes are public. Device writes require configured per-player opt-in,
+    verified identity and volume policy, and fresh state.
+
+    ## Playback workflow
+    1. List players and sources, then browse items to obtain a current `item_ref`.
+       References are opaque; do not construct them from names or device IDs.
+    2. Send the concrete playback body to **Preflight**. This read-only check
+       changes neither playback nor the journal and does not reserve a player.
+    3. Submit the same body to **Start playback** with a stable `Idempotency-Key`
+       and the preflight player's revision in a quoted `If-Match` header.
+    4. Follow `Location` or read `/v1/operations/{operation}` to observe execution.
+       **202 Accepted means durable admission, not confirmed playback or success.**
+       Inspect operation state, phase and error code; events notify you to reread.
+
+    ## Retries and state
+    Retry an ambiguous HTTP submission using the same idempotency key and input.
+    A matching retry observes the original operation; it never submits a second
+    playback run. A new request is independently checked against current state.
+    Stale or unknown observations do not authorize playback or volume increases.
+    Manual intervention can release ownership and remove future automation writes,
+    including the scheduled stop. Examples are illustrative; configured device
+    limits and current media references remain authoritative.
+servers:
+- url: /
+  description: Service hosting this OpenAPI document
+tags:
+- name: Players
+  description: Authorized player state, queue snapshots and group observations.
+- name: Sources
+  description: Discover configured local sources and browse opaque media references.
+- name: Playback
+  description: Preflight, concrete playback requests and direct device control.
+- name: Operations
+  description: Observe accepted work and explicitly cancel an owned operation.
+- name: Events
+  description: Bounded server-sent notifications; reread snapshots after a gap.
+- name: Health
+  description: Public probes and authenticated Prometheus metrics.
+paths:
+  /livez:
+    get:
+      operationId: getLiveness
+      tags: [Health]
+      summary: Process health, independent of PostgreSQL and speakers
+      security: []
+      responses:
+        '200':
+          description: Process is serving requests
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                - status
+                properties:
+                  status:
+                    type: string
+                    const: live
+  /readyz:
+    get:
+      operationId: getReadiness
+      tags: [Health]
+      summary: Database connectivity and compatible migration checksums
+      security: []
+      responses:
+        '200':
+          description: Initialized and ready
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                - status
+                properties:
+                  status:
+                    type: string
+                    const: ready
+        '503':
+          description: Database unavailable, incompatible schema, or shutdown in progress
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                - status
+                properties:
+                  status:
+                    type: string
+                    const: unavailable
+  /metrics:
+    get:
+      operationId: getMetrics
+      tags: [Health]
+      summary: Prometheus metrics; read scope and player ACLs apply
+      responses:
+        '200':
+          description: Bounded operational gauges; database failure is reported as a zero readiness gauge
+          content:
+            text/plain:
+              schema:
+                type: string
+        '400':
+          description: Request rejected
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Request rejected
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Request rejected
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: Request rejected
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Request rejected
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /v1/players:
+    get:
+      operationId: getPlayers
+      tags: [Players]
+      summary: List authorized players
+      description: Requires read scope. Returns configured players permitted by the credential, including freshness and availability. Unknown or stale state is not a write grant.
+      parameters: []
+      responses:
+        '200':
+          description: Current read-only result
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Player'
+          headers:
+            X-Request-ID:
+              schema:
+                type: string
+            Cache-Control:
+              schema:
+                type: string
+                const: no-store
+        default:
+          description: Rejected request; no playback command was sent.
+          headers:
+            X-Request-ID:
+              schema:
+                type: string
+            WWW-Authenticate:
+              schema:
+                type: string
+            Retry-After:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /v1/players/{player}:
+    get:
+      operationId: getPlayer
+      tags: [Players]
+      summary: Read player state
+      description: Requires read scope and a grant for this player. Returns an observed snapshot and ETag. Quote the revision in If-Match for a new mutation; admission independently revalidates it.
+      parameters:
+      - &id001
+        name: player
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^[a-z0-9][a-z0-9-]{0,63}$
+          maxLength: 64
+      responses:
+        '200':
+          description: Current read-only result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Player'
+          headers:
+            X-Request-ID:
+              schema:
+                type: string
+            Cache-Control:
+              schema:
+                type: string
+                const: no-store
+            ETag:
+              description: Quoted state revision including process epoch.
+              schema:
+                type: string
+        default:
+          description: Rejected request; no playback command was sent.
+          headers:
+            X-Request-ID:
+              schema:
+                type: string
+            WWW-Authenticate:
+              schema:
+                type: string
+            Retry-After:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /v1/groups:
+    get:
+      operationId: getGroups
+      tags: [Players]
+      summary: Read group membership
+      description: Requires read scope. Projects only authorized configured players; this is not a complete inventory of every room. Grouped targets are not writable.
+      parameters: []
+      responses:
+        '200':
+          description: Current read-only result
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Group'
+          headers:
+            X-Request-ID:
+              schema:
+                type: string
+            Cache-Control:
+              schema:
+                type: string
+                const: no-store
+        default:
+          description: Rejected request; no playback command was sent.
+          headers:
+            X-Request-ID:
+              schema:
+                type: string
+            WWW-Authenticate:
+              schema:
+                type: string
+            Retry-After:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /v1/sources:
+    get:
+      operationId: getSources
+      tags: [Sources]
+      summary: List local media sources
+      description: Requires read scope. Lists configured sources for authorized players; availability depends on current HEOS discovery.
+      parameters: []
+      responses:
+        '200':
+          description: Current read-only result
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Source'
+          headers:
+            X-Request-ID:
+              schema:
+                type: string
+            Cache-Control:
+              schema:
+                type: string
+                const: no-store
+        default:
+          description: Rejected request; no playback command was sent.
+          headers:
+            X-Request-ID:
+              schema:
+                type: string
+            WWW-Authenticate:
+              schema:
+                type: string
+            Retry-After:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /v1/sources/{source}/items:
+    get:
+      operationId: getItems
+      tags: [Sources]
+      summary: Browse source items
+      description: Requires read scope and access to the source player. Pass a browsable item_ref as parent_ref to enter a container, and next_cursor as cursor to continue a listing, with bounded traversal. Use an available playable item_ref for preflight and playback.
+      parameters:
+      - name: source
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^[a-z0-9][a-z0-9-]{0,63}$
+          maxLength: 64
+      - name: parent_ref
+        in: query
+        required: false
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 256
+      - name: cursor
+        in: query
+        required: false
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 256
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 50
+      responses:
+        '200':
+          description: Current read-only result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Items'
+          headers:
+            X-Request-ID:
+              schema:
+                type: string
+            Cache-Control:
+              schema:
+                type: string
+                const: no-store
+        default:
+          description: Rejected request; no playback command was sent.
+          headers:
+            X-Request-ID:
+              schema:
+                type: string
+            WWW-Authenticate:
+              schema:
+                type: string
+            Retry-After:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /v1/players/{player}/queue:
+    get:
+      operationId: getQueue
+      tags: [Players]
+      summary: Read a queue page
+      description: Requires read scope and a grant for this player. Follow next_offset while it is non-null. A stale or partial queue is not evidence of playback ownership.
+      parameters:
+      - name: player
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^[a-z0-9][a-z0-9-]{0,63}$
+          maxLength: 64
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          maximum: 10000
+          default: 0
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 50
+      - name: revision
+        in: query
+        required: false
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 160
+      responses:
+        '200':
+          description: Current read-only result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Queue'
+          headers:
+            X-Request-ID:
+              schema:
+                type: string
+            Cache-Control:
+              schema:
+                type: string
+                const: no-store
+        default:
+          description: Rejected request; no playback command was sent.
+          headers:
+            X-Request-ID:
+              schema:
+                type: string
+            WWW-Authenticate:
+              schema:
+                type: string
+            Retry-After:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /v1/players/{player}/preflight:
+    post:
+      operationId: preflight
+      tags: [Playback]
+      summary: Check playback readiness
+      description: Read-only check of a concrete PlaybackInput, including bounded media resolution. Returns readiness warnings and an observed player revision; does not reserve the player, persist a run, select media or change playback. No Idempotency-Key or If-Match is required. Read scope and player ACL apply; takeover requires operator scope. Playback revalidates independently.
+      parameters:
+      - name: player
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^[a-z0-9][a-z0-9-]{0,63}$
+          maxLength: 64
+      responses:
+        '200':
+          description: Current read-only result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Preflight'
+          headers:
+            X-Request-ID:
+              schema:
+                type: string
+            Cache-Control:
+              schema:
+                type: string
+                const: no-store
+        default:
+          description: Rejected request; no playback command was sent.
+          headers:
+            X-Request-ID:
+              schema:
+                type: string
+            WWW-Authenticate:
+              schema:
+                type: string
+            Retry-After:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlaybackInput'
+  /v1/operations:
+    get:
+      operationId: listOperations
+      tags: [Operations]
+      summary: List authorized operation history
+      description: >-
+        Requires read scope. Returns the caller's operations on authorized players;
+        operator scope additionally permits other creators on those players.
+        Ordered by creation time and ID, newest first. Pagination is a live view:
+        state changes and retention may change matching rows between requests.
+        Repeat the same filters and limit with next_cursor. Cursors grant no access.
+        Reads PostgreSQL only and sends no HEOS commands.
+      parameters:
+      - name: player
+        in: query
+        schema:
+          type: string
+          pattern: ^[a-z0-9][a-z0-9-]{0,63}$
+          minLength: 1
+          maxLength: 64
+      - name: state
+        in: query
+        schema:
+          type: string
+          enum: [accepted, running, succeeded, failed, cancelled, released, interrupted, uncertain]
+          x-enum-varnames: [HistoryAccepted, HistoryRunning, HistorySucceeded, HistoryFailed, HistoryCancelled, HistoryReleased, HistoryInterrupted, HistoryUncertain]
+      - name: kind
+        in: query
+        description: Exact operation kind; alarm is readable legacy data, not a mutation endpoint.
+        schema:
+          type: string
+          enum: [alarm, playback, volume, mute, transport, stop, cancel]
+          x-enum-varnames: [HistoryAlarm, HistoryPlayback, HistoryVolume, HistoryMute, HistoryTransport, HistoryStop, HistoryCancel]
+      - name: delivery
+        in: query
+        description: Exact outcome.delivery; records without delivery do not match this filter.
+        schema:
+          type: string
+          enum: [confirmed, rejected, not_sent, unknown]
+          x-enum-varnames: [HistoryConfirmed, HistoryRejected, HistoryNotSent, HistoryUnknown]
+      - name: created_from
+        in: query
+        description: Inclusive creation-time lower bound, RFC 3339 with timezone. Normalized to UTC.
+        schema:
+          type: string
+          format: date-time
+      - name: created_before
+        in: query
+        description: Exclusive creation-time upper bound, strictly later than created_from.
+        schema:
+          type: string
+          format: date-time
+      - name: limit
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 50
+      - name: cursor
+        in: query
+        description: Opaque continuation token from the preceding page; at most 2 KiB.
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 2048
+      responses:
+        '200':
+          description: Authorized journal page; empty items and null cursor when no rows match.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationPage'
+          headers:
+            X-Request-ID:
+              schema:
+                type: string
+            Cache-Control:
+              schema:
+                type: string
+                const: no-store
+        default:
+          description: Rejected request; no playback command was sent.
+          headers:
+            X-Request-ID:
+              schema:
+                type: string
+            WWW-Authenticate:
+              schema:
+                type: string
+            Retry-After:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /v1/operations/{operation}:
+    get:
+      operationId: getOperation
+      tags: [Operations]
+      summary: Read operation progress and result
+      description: Requires read scope and a player grant. The creator may read its operation; operator scope additionally permits other creators on the same authorized player. Acceptance is not success; inspect state, phase, error_code and outcome.
+      parameters:
+      - &id002
+        name: operation
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: ^[a-zA-Z0-9_-]+$
+      responses:
+        '200':
+          description: Current read-only result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Operation'
+          headers:
+            X-Request-ID:
+              schema:
+                type: string
+            Cache-Control:
+              schema:
+                type: string
+                const: no-store
+        default:
+          description: Rejected request; no playback command was sent.
+          headers:
+            X-Request-ID:
+              schema:
+                type: string
+            WWW-Authenticate:
+              schema:
+                type: string
+            Retry-After:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /v1/events:
+    get:
+      operationId: getEvents
+      tags: [Events]
+      summary: Subscribe to change notifications
+      parameters:
+      - name: Last-Event-ID
+        in: header
+        required: false
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 160
+      responses:
+        '200':
+          description: Current read-only result
+          content:
+            text/event-stream:
+              schema:
+                type: string
+              example: 'id: epoch:1
+
+                event: snapshot_required
+
+                data: {}
+
+
+                '
+          headers:
+            X-Request-ID:
+              schema:
+                type: string
+            Cache-Control:
+              schema:
+                type: string
+                const: no-store
+        default:
+          description: Rejected request; no playback command was sent.
+          headers:
+            X-Request-ID:
+              schema:
+                type: string
+            WWW-Authenticate:
+              schema:
+                type: string
+            Retry-After:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      description: 'Bounded replay. Event kinds: player_changed, operation_changed,
+        snapshot_required. Data contains authorized player and optional operation
+        identifiers only; fetch snapshots after a gap/restart. Slow clients disconnect.
+        Heartbeat every 15 seconds.'
+  /v1/players/{player}/playback:
+    post:
+      operationId: playback
+      tags: [Playback]
+      summary: Start playback
+      description: Requires operator scope.
+      parameters:
+      - *id001
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 256
+          pattern: ^[A-Za-z0-9._:-]+$
+      - name: If-Match
+        in: header
+        required: false
+        description: Required for a new request (428 if absent); replay precedes freshness
+          checks.
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 256
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlaybackInput'
+      responses:
+        '202':
+          description: Durably admitted operation or current idempotent replay; acceptance
+            is not device confirmation.
+          headers:
+            Location:
+              required: true
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Operation'
+        default:
+          description: Request error. Inspect the same idempotency key after an uncertain
+            commit.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /v1/players/{player}/volume:
+    put:
+      operationId: setVolume
+      tags: [Playback]
+      summary: Set absolute volume
+      description: Requires control scope. Takeover additionally requires operator
+        scope.
+      parameters:
+      - *id001
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 256
+          pattern: ^[A-Za-z0-9._:-]+$
+      - name: If-Match
+        in: header
+        required: false
+        description: Required for a new request (428 if absent); replay precedes freshness
+          checks.
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 256
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VolumeInput'
+      responses:
+        '202':
+          description: Durably admitted operation or current idempotent replay; acceptance
+            is not device confirmation.
+          headers:
+            Location:
+              required: true
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Operation'
+        default:
+          description: Request error. Inspect the same idempotency key after an uncertain
+            commit.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /v1/players/{player}/mute:
+    put:
+      operationId: setMute
+      tags: [Playback]
+      summary: Set mute state
+      description: Requires control scope. Takeover additionally requires operator
+        scope.
+      parameters:
+      - *id001
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 256
+          pattern: ^[A-Za-z0-9._:-]+$
+      - name: If-Match
+        in: header
+        required: false
+        description: Required for a new request (428 if absent); replay precedes freshness
+          checks.
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 256
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MuteInput'
+      responses:
+        '202':
+          description: Durably admitted operation or current idempotent replay; acceptance
+            is not device confirmation.
+          headers:
+            Location:
+              required: true
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Operation'
+        default:
+          description: Request error. Inspect the same idempotency key after an uncertain
+            commit.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /v1/players/{player}/transport:
+    put:
+      operationId: setTransport
+      tags: [Playback]
+      summary: Set playback state
+      description: Requires control scope. Takeover additionally requires operator
+        scope.
+      parameters:
+      - *id001
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 256
+          pattern: ^[A-Za-z0-9._:-]+$
+      - name: If-Match
+        in: header
+        required: false
+        description: Required for a new request (428 if absent); replay precedes freshness
+          checks.
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 256
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransportInput'
+      responses:
+        '202':
+          description: Durably admitted operation or current idempotent replay; acceptance
+            is not device confirmation.
+          headers:
+            Location:
+              required: true
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Operation'
+        default:
+          description: Request error. Inspect the same idempotency key after an uncertain
+            commit.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /v1/players/{player}/stop:
+    post:
+      operationId: stopPlayer
+      tags: [Playback]
+      summary: Stop playback as operator
+      description: Requires operator scope.
+      parameters:
+      - *id001
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 256
+          pattern: ^[A-Za-z0-9._:-]+$
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StopInput'
+      responses:
+        '202':
+          description: Durably admitted operation or current idempotent replay; acceptance
+            is not device confirmation.
+          headers:
+            Location:
+              required: true
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Operation'
+        default:
+          description: Request error. Inspect the same idempotency key after an uncertain
+            commit.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /v1/operations/{operation}/cancel:
+    post:
+      operationId: cancelOperation
+      tags: [Operations]
+      summary: Cancel an operation
+      description: Requires control scope. Takeover additionally requires operator
+        scope.
+      parameters:
+      - *id002
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 256
+          pattern: ^[A-Za-z0-9._:-]+$
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CancelInput'
+      responses:
+        '202':
+          description: Durably admitted operation or current idempotent replay; acceptance
+            is not device confirmation.
+          headers:
+            Location:
+              required: true
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Operation'
+        default:
+          description: Request error. Inspect the same idempotency key after an uncertain
+            commit.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+components:
+  securitySchemes:
+    machineToken:
+      type: http
+      scheme: bearer
+      description: Machine token over verified HTTPS, explicit route scope and player
+        allowlist. Read does not imply control; operator does not imply read.
+  schemas:
+    Player:
+      type: object
+      additionalProperties: false
+      required:
+      - key
+      - availability
+      - observed_at
+      - stale
+      - revision
+      - playback_state
+      - volume
+      - muted
+      - grouped
+      - capabilities
+      - active_operation
+      properties:
+        key:
+          type: string
+          pattern: ^[a-z0-9][a-z0-9-]{0,63}$
+          maxLength: 64
+        availability:
+          type: string
+          enum:
+          - online
+          - offline
+          - unknown
+        observed_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        stale:
+          type: boolean
+        revision:
+          type: string
+          maxLength: 160
+        playback_state:
+          type: string
+          enum:
+          - unknown
+          - play
+          - pause
+          - stop
+        volume:
+          type: object
+          additionalProperties: false
+          required:
+          - unit
+          - level
+          properties:
+            unit:
+              type: string
+              const: heos
+            level:
+              type:
+              - integer
+              - 'null'
+              minimum: 0
+              maximum: 100
+        muted:
+          type:
+          - boolean
+          - 'null'
+        grouped:
+          type:
+          - boolean
+          - 'null'
+        capabilities:
+          type: object
+          additionalProperties: false
+          required:
+          - read
+          - playback
+          - volume
+          properties:
+            read:
+              type: string
+              enum:
+              - supported
+              - unsupported
+              - unverified
+            playback:
+              type: string
+              enum:
+              - supported
+              - unsupported
+              - unverified
+            volume:
+              type: string
+              enum:
+              - supported
+              - unsupported
+              - unverified
+        active_operation:
+          type:
+          - string
+          - 'null'
+      x-go-type: control.Player
+      x-go-type-import:
+        path: github.com/dreylark/heos-control/internal/control
+        name: control
+    Group:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - player
+      - name
+      - members
+      - stale
+      properties:
+        id:
+          type: string
+          maxLength: 256
+        player:
+          type: string
+          pattern: ^[a-z0-9][a-z0-9-]{0,63}$
+          maxLength: 64
+        name:
+          type: string
+        members:
+          type: array
+          items:
+            type: string
+            pattern: ^[a-z0-9][a-z0-9-]{0,63}$
+            maxLength: 64
+        stale:
+          type: boolean
+      x-go-type: control.Group
+      x-go-type-import:
+        path: github.com/dreylark/heos-control/internal/control
+        name: control
+    Source:
+      type: object
+      additionalProperties: false
+      required:
+      - key
+      - player
+      - name
+      - availability
+      properties:
+        key:
+          type: string
+          pattern: ^[a-z0-9][a-z0-9-]{0,63}$
+          maxLength: 64
+        player:
+          type: string
+          pattern: ^[a-z0-9][a-z0-9-]{0,63}$
+          maxLength: 64
+        name:
+          type: string
+        availability:
+          type: string
+          enum:
+          - available
+          - unavailable
+          - ambiguous
+      x-go-type: control.Source
+      x-go-type-import:
+        path: github.com/dreylark/heos-control/internal/control
+        name: control
+    Items:
+      type: object
+      additionalProperties: false
+      required:
+      - items
+      - total
+      - next_cursor
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required:
+            - name
+            - item_ref
+            - kind
+            - browsable
+            - playable
+            properties:
+              name:
+                type: string
+              item_ref:
+                type: string
+              kind:
+                type: string
+                enum:
+                - source
+                - container
+                - media
+              browsable:
+                type: boolean
+              playable:
+                type: boolean
+        total:
+          type:
+          - integer
+          - 'null'
+          minimum: 0
+        next_cursor:
+          type:
+          - string
+          - 'null'
+      x-go-type: control.Items
+      x-go-type-import:
+        path: github.com/dreylark/heos-control/internal/control
+        name: control
+    Queue:
+      type: object
+      additionalProperties: false
+      required:
+      - revision
+      - stale
+      - items
+      - total
+      - next_offset
+      properties:
+        revision:
+          type: string
+        stale:
+          type: boolean
+        items:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required:
+            - queue_id
+            - song
+            - album
+            - artist
+            properties:
+              queue_id:
+                type: string
+              song:
+                type: string
+              album:
+                type: string
+              artist:
+                type: string
+        total:
+          type:
+          - integer
+          - 'null'
+          minimum: 0
+        next_offset:
+          type:
+          - integer
+          - 'null'
+          minimum: 0
+      x-go-type: control.Queue
+      x-go-type-import:
+        path: github.com/dreylark/heos-control/internal/control
+        name: control
+    Preflight:
+      type: object
+      additionalProperties: false
+      required:
+      - ready
+      - player
+      - warnings
+      properties:
+        ready:
+          type: boolean
+        player:
+          $ref: '#/components/schemas/Player'
+        warnings:
+          type: array
+          items:
+            type: string
+      x-go-type: control.Preflight
+      x-go-type-import:
+        path: github.com/dreylark/heos-control/internal/control
+        name: control
+    Operation:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - kind
+      - player
+      - state
+      - phase
+      - revision
+      - config_revision
+      - selected_album
+      - created_at
+      - updated_at
+      - started_at
+      - finished_at
+      - error_code
+      - outcome
+      - playback
+      properties:
+        playback:
+          description: Confirmed bounded playback timeline; null before confirmation and for short operations. Stop time is a deadline, not a device guarantee. Persists after ownership release.
+          oneOf:
+          - $ref: '#/components/schemas/PlaybackProgress'
+          - type: 'null'
+        id:
+          type: string
+        kind:
+          type: string
+        player:
+          type: string
+          pattern: ^[a-z0-9][a-z0-9-]{0,63}$
+          maxLength: 64
+        state:
+          type: string
+        phase:
+          type: string
+        revision:
+          type: integer
+        config_revision:
+          type: string
+        selected_album:
+          type:
+          - string
+          - 'null'
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        started_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        finished_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        error_code:
+          type:
+          - string
+          - 'null'
+        outcome:
+          type: object
+          additionalProperties: true
+          properties:
+            diagnostics:
+              $ref: '#/components/schemas/OperationDiagnostics'
+      x-go-type: control.Operation
+      x-go-type-import:
+        path: github.com/dreylark/heos-control/internal/control
+        name: control
+    OperationPage:
+      type: object
+      additionalProperties: false
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/Operation'
+        next_cursor:
+          type: [string, 'null']
+          maxLength: 2048
+    OperationDiagnostics:
+      type: object
+      additionalProperties: false
+      description: >-
+        Bounded completion evidence (at most 4 KiB), captured without additional
+        device reads. Optional for old and unfinished operations. Missing evidence
+        is not reconstructed; reason does not establish that a human caused it.
+      required: [reason, rule, phase, detected_at, source, changed_fields]
+      properties:
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: Extensible machine-readable completion reason; clients must tolerate new values.
+        rule:
+          type: [string, 'null']
+          maxLength: 128
+          description: Decision-table rule only when a policy actually selected it.
+        phase:
+          type: string
+          maxLength: 128
+          description: Last active phase before the terminal transition.
+        detected_at:
+          type: [string, 'null']
+          format: date-time
+          description: UTC cause-detection time; null when unknown, including startup recovery.
+        source:
+          type: string
+          enum: [event, observation, controller, recovery]
+          x-enum-varnames: [DiagnosticEvent, DiagnosticObservation, DiagnosticController, DiagnosticRecovery]
+        changed_fields:
+          type: array
+          maxItems: 16
+          uniqueItems: true
+          items:
+            type: string
+            minLength: 1
+            maxLength: 64
+        expected:
+          $ref: '#/components/schemas/OperationDiagnosticScalars'
+        observed:
+          $ref: '#/components/schemas/OperationDiagnosticScalars'
+    OperationDiagnosticScalars:
+      type: object
+      additionalProperties: false
+      description: Allowlisted partial evidence. Absent fields were not observed or compared.
+      properties:
+        state:
+          type: string
+          enum: [unknown, play, pause, stop]
+          x-enum-varnames: [DiagnosticUnknown, DiagnosticPlay, DiagnosticPause, DiagnosticStop]
+        volume:
+          type: integer
+          minimum: 0
+          maximum: 100
+        muted:
+          type: boolean
+        repeat:
+          type: string
+          enum: [off, on_all, on_one]
+          x-enum-varnames: [DiagnosticRepeatOff, DiagnosticRepeatAll, DiagnosticRepeatOne]
+        shuffle:
+          type: boolean
+        grouped:
+          type: boolean
+    Error:
+      type: object
+      additionalProperties: false
+      required:
+      - error
+      - request_id
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required:
+          - code
+          - message
+          - retryable
+          - outcome
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            retryable:
+              type: boolean
+            outcome:
+              type: string
+              enum:
+              - not_sent
+              - rejected
+              - unknown
+        request_id:
+          type: string
+        operation_id:
+          type: string
+    RequestedVolume:
+      type: object
+      additionalProperties: false
+      required:
+      - unit
+      - level
+      properties:
+        unit:
+          type: string
+          const: heos
+        level:
+          type: integer
+          minimum: 0
+          maximum: 100
+    PlaybackProgress:
+      type: object
+      additionalProperties: false
+      required:
+      - playback_started_at
+      - stop_at
+      - elapsed_seconds
+      - level
+      properties:
+        playback_started_at:
+          type: string
+          format: date-time
+        stop_at:
+          type: string
+          format: date-time
+        elapsed_seconds:
+          type: integer
+          minimum: 0
+          maximum: 7200
+        level:
+          description: Last confirmed HEOS volume, not a live player reading.
+          type: integer
+          minimum: 0
+          maximum: 100
+    PlaybackAutomation:
+      description: Optional bounded playback. Requires repeat off, initial <= target <= player ceiling, and ramp <= duration - fade with fade < duration. With takeover false, playing targets return 409; paused or stopped targets may start unless another operation owns the device. Natural transitions and manual Next/Previous within the complete unchanged queue preserve the original ramp, fade and stop deadline. Pause, volume, mute, mode, source, group or queue changes release ownership and remove the timer. During an active run, Stop or transient unknown suspends writes for up to twelve seconds, capped by the original stop deadline; fresh Play must confirm the unchanged queue, valid MID/QID and other controls before resuming. Repeated Stop does not extend the wait; persistent Stop releases without cleanup. Manual Stop then Play in this window may preserve the run, as HEOS cannot distinguish it from Next. Operator /stop cancels immediately.
+      type: object
+      additionalProperties: false
+      required:
+      - target_volume
+      - ramp_seconds
+      - duration_seconds
+      - fade_seconds
+      properties:
+        target_volume:
+          $ref: '#/components/schemas/RequestedVolume'
+        ramp_seconds:
+          type: integer
+          minimum: 0
+          maximum: 7200
+        duration_seconds:
+          type: integer
+          minimum: 1
+          maximum: 7200
+        fade_seconds:
+          type: integer
+          minimum: 0
+          maximum: 60
+    PlaybackInput:
+      description: A concrete item from the items API. Omitting automation starts ordinary playback without a service stop timer. With automation, repeat must be off and the timeline begins after playback is confirmed. Preflight accepts the same body but performs no writes.
+      examples:
+      - item_ref: replace-with-current-item-ref
+        queue_mode: replace
+        shuffle: false
+        repeat: 'off'
+        initial_volume: {unit: heos, level: 2}
+        takeover: false
+        automation:
+          target_volume: {unit: heos, level: 3}
+          ramp_seconds: 10
+          duration_seconds: 60
+          fade_seconds: 5
+      type: object
+      additionalProperties: false
+      required:
+      - item_ref
+      - queue_mode
+      - shuffle
+      - repeat
+      - initial_volume
+      - takeover
+      properties:
+        automation:
+          $ref: '#/components/schemas/PlaybackAutomation'
+        item_ref:
+          type: string
+          minLength: 1
+          maxLength: 256
+        queue_mode:
+          type: string
+          const: replace
+        shuffle:
+          type: boolean
+        repeat:
+          type: string
+          enum:
+          - 'off'
+          - on_all
+          - on_one
+        initial_volume:
+          $ref: '#/components/schemas/RequestedVolume'
+        takeover:
+          type: boolean
+    VolumeInput:
+      type: object
+      additionalProperties: false
+      required:
+      - unit
+      - level
+      - takeover
+      properties:
+        unit:
+          type: string
+          const: heos
+        level:
+          type: integer
+          minimum: 0
+          maximum: 100
+        takeover:
+          type: boolean
+    MuteInput:
+      type: object
+      additionalProperties: false
+      required:
+      - muted
+      - takeover
+      properties:
+        muted:
+          type: boolean
+        takeover:
+          type: boolean
+    TransportInput:
+      type: object
+      additionalProperties: false
+      required:
+      - state
+      - takeover
+      properties:
+        state:
+          type: string
+          enum:
+          - play
+          - pause
+          - stop
+        takeover:
+          type: boolean
+    StopInput:
+      type: object
+      additionalProperties: false
+      required:
+      - fade_seconds
+      properties:
+        fade_seconds:
+          type: integer
+          minimum: 0
+          maximum: 60
+    CancelInput:
+      type: object
+      additionalProperties: false
+      required:
+      - mode
+      properties:
+        mode:
+          type: string
+          enum:
+          - release
+          - stop_owned
+        fade_seconds:
+          type: integer
+          minimum: 0
+          maximum: 60
+security:
+- machineToken: []

@@ -1,0 +1,181 @@
+name: Release
+
+on:
+  release:
+    types:
+      - published
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: release-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 40
+    outputs:
+      checks: ${{ steps.gate.outputs.checks }}
+      reused: ${{ steps.gate.outputs.reused }}
+      run_id: ${{ steps.gate.outputs.run_id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Await main CI or select fresh release verification
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
+        id: gate
+        with:
+          script: |
+            const {gate} = require('./scripts/ci/gate.cjs');
+            const result = await gate(github, context, core);
+            for (const [name, value] of Object.entries(result)) core.setOutput(name, String(value));
+            if (result.reused) {
+              const sha = context.sha;
+              const url = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${result.run_id}`;
+              await core.summary.addRaw(`Reusing [CI run ${result.run_id}](${url}) for exact source ${sha}.`).write();
+            }
+
+  verify:
+    needs: gate
+    if: needs.gate.outputs.checks == 'true'
+    uses: ./.github/workflows/ci.yaml
+
+  qualify:
+    needs:
+      - gate
+      - verify
+    if: >-
+      ${{ !cancelled() && needs.gate.result == 'success' && (needs.gate.outputs.reused == 'true' || needs.verify.result
+      == 'success') }}
+    uses: ./.github/workflows/build.yaml
+    with:
+      full: true
+      runtime-run-id: ${{ needs.gate.outputs.run_id }}
+
+  publish:
+    needs:
+      - gate
+      - verify
+      - qualify
+    if: >-
+      ${{ !cancelled() && needs.gate.result == 'success' && needs.qualify.result == 'success' && (needs.gate.outputs.reused
+      == 'true' || needs.verify.result == 'success') }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      packages: write
+    concurrency:
+      group: ghcr-release-${{ github.repository }}
+      cancel-in-progress: false
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - uses: ./.github/actions/go-cache
+        id: go-cache
+        with:
+          workload: release-metadata
+
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
+        with:
+          version: v4.2.4
+
+      - name: Download binary from the verified CI run
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: runtime-binary
+          path: bin
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ needs.gate.outputs.run_id }}
+
+      - name: Release metadata
+        id: metadata
+        run: |
+          version=$(go run ./scripts/release -tag "$RELEASE_TAG")
+          chmod +x bin/heos-control
+          bin/heos-control version | jq -e --arg version "$version" --arg commit "$GITHUB_SHA" '.version == $version and .commit == $commit'
+          echo "RELEASE_VERSION=$version" >> "$GITHUB_ENV"
+          echo "image=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e  # v4.3.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f  # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish release image
+        id: image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
+        with:
+          context: .
+          target: runtime-prebuilt
+          build-contexts: runtime-binaries=./bin
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          tags: ${{ steps.metadata.outputs.image }}:${{ env.RELEASE_VERSION }}
+          build-args: |
+            VERSION=${{ env.RELEASE_VERSION }}
+            COMMIT=${{ github.sha }}
+            SOURCE=${{ github.server_url }}/${{ github.repository }}
+
+      - name: Package and publish OCI chart
+        env:
+          IMAGE: ${{ steps.metadata.outputs.image }}
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HELM_REGISTRY_CONFIG: ${{ runner.temp }}/helm-registry.json
+        run: |
+          chart_directory=$(mktemp -d "$RUNNER_TEMP/heos-chart.XXXXXX")
+          go run ./scripts/release -tag "$RELEASE_TAG" -destination "$chart_directory" -image "$IMAGE" -digest "$IMAGE_DIGEST" -revision "$GITHUB_SHA"
+          mkdir -p dist/published
+          helm lint "$chart_directory"
+          helm template heos-control "$chart_directory" > dist/published/rendered.yaml
+          helm package "$chart_directory" --destination dist/published
+          printf '%s' "$GH_TOKEN" | helm registry login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          trap 'helm registry logout ghcr.io >/dev/null 2>&1 || true' EXIT
+          helm push "dist/published/heos-control-$RELEASE_VERSION.tgz" "oci://$IMAGE/charts" 2>&1 | tee dist/published/chart-push.txt
+          printf 'image=%s@%s\nchart=oci://%s/charts/heos-control\nversion=%s\nsource_commit=%s\n' "$IMAGE" "$IMAGE_DIGEST" "$IMAGE" "$RELEASE_VERSION" "$GITHUB_SHA" > dist/published/references.txt
+          sha256sum "dist/published/heos-control-$RELEASE_VERSION.tgz" > dist/published/chart.sha256
+          cat dist/published/references.txt >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Retain published chart and references
+        if: ${{ !cancelled() && steps.image.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: published-release
+          path: dist/published/
+          retention-days: 30
+          if-no-files-found: warn
+          overwrite: true
+
+      - name: Save downloaded modules after successful checks
+        if: ${{ success() && steps.go-cache.outputs.module-key != '' && steps.go-cache.outputs.module-hit
+          != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          key: ${{ steps.go-cache.outputs.module-key }}
+          path: ${{ env.GOMODCACHE }}
+
+      - name: Save compiled packages even after failed checks
+        if: ${{ !cancelled() && steps.go-cache.outputs.build-key != '' && steps.go-cache.outputs.build-hit
+          != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          key: ${{ steps.go-cache.outputs.build-key }}
+          path: ${{ env.GOCACHE }}

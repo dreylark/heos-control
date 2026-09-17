@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+  workflow_dispatch:
+    inputs:
+      full:
+        description: Also run container integration and recovery/resource qualification
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      full:
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: read
+
+# A new PR commit replaces its previous checks. Release fallback is never cancelled.
+concurrency:
+  group: verification-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'release' }}
+
+jobs:
+  lint:
+    uses: ./.github/workflows/lint.yaml
+
+  tests:
+    needs: lint
+    uses: ./.github/workflows/tests.yaml
+
+  build:
+    needs: lint
+    uses: ./.github/workflows/build.yaml
+    with:
+      full: >-
+        ${{ inputs.full || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name
+        == github.repository && startsWith(github.head_ref, 'release/v')) }}

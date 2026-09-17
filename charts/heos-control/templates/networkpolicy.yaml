@@ -1,0 +1,46 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "heos-control.name" . }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "heos-control.selector" . | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  {{- if .Values.networkPolicy.apiPeers }}
+  ingress:
+    - from:
+        {{- toYaml .Values.networkPolicy.apiPeers | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.api.port }}
+  {{- else }}
+  ingress: []
+  {{- end }}
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    {{- with .Values.networkPolicy.databasePeers }}
+    - to:
+        {{- toYaml . | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: {{ $.Values.database.port }}
+    {{- end }}
+    {{- with .Values.networkPolicy.heosPeers }}
+    - to:
+        {{- toYaml . | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 1265
+    {{- end }}
+{{- end }}

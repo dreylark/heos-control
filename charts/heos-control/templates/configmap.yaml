@@ -1,0 +1,34 @@
+{{- if le (int .Values.terminationGracePeriodSeconds) (int .Values.shutdownSeconds) }}
+{{- fail "terminationGracePeriodSeconds must exceed shutdownSeconds" }}
+{{- end }}
+{{- if gt (int .Values.database.lockTimeoutSeconds) (int .Values.database.timeoutSeconds) }}
+{{- fail "database.lockTimeoutSeconds must not exceed timeoutSeconds" }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "heos-control.name" . }}
+data:
+  config.json: |
+    {
+      "listen": ":{{ .Values.api.port }}",
+      "log_level": {{ .Values.logging.level | toJson }},
+      "cert_file": "/etc/heos-control/api-tls/tls.crt",
+      "key_file": "/etc/heos-control/api-tls/tls.key",
+      "shutdown_seconds": {{ .Values.shutdownSeconds }},
+      "docs_enabled": {{ .Values.api.docs.enabled | toJson }},
+      "credentials_file": {{ if .Values.api.credentialsSecret }}"/etc/heos-control/credentials/credentials.json"{{ else }}""{{ end }},
+      "players": {{ .Values.players | toJson }},
+      "sources": {{ .Values.sources | toJson }},
+      "database": {
+        "host": {{ .Values.database.host | toJson }},
+        "port": {{ .Values.database.port }},
+        "name": {{ .Values.database.name | toJson }},
+        "user": {{ .Values.database.user | toJson }},
+        "password_file": "/etc/heos-control/database/password",
+        "ca_file": "/etc/heos-control/database-ca/ca.crt",
+        "max_connections": {{ .Values.database.maxConnections }},
+        "timeout_seconds": {{ .Values.database.timeoutSeconds }},
+        "lock_timeout_seconds": {{ .Values.database.lockTimeoutSeconds }}
+      }
+    }

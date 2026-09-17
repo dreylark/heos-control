@@ -1,0 +1,74 @@
+replicaCount: 1
+logging:
+  # DEBUG adds sanitized HEOS exchanges and state observations; no raw payloads.
+  level: info
+# Optional consumer annotations, for example an existing Secret reload controller.
+deploymentAnnotations: {}
+image:
+  repository: heos-control
+  tag: dev
+  digest: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+api:
+  port: 8443
+  tlsSecret: heos-control-api-tls
+  # Empty credentials disable access to /v1; health remains available.
+  credentialsSecret: ""
+  docs:
+    # Expose /docs (Scalar) and /openapi.yaml without authentication.
+    # API requests from the reference still require a bearer token.
+    enabled: false
+# Physical identities and verified certificate pins are supplied externally.
+# Player/source objects use runtime JSON fields (docs/CONFIGURATION.md).
+# writes_enabled defaults false; true requires a verified volume_ceiling.
+# Secure CLI uses TCP 1265 (docs/DEVICE_COMPATIBILITY.md).
+players: []
+sources: []
+database:
+  host: postgres.example.invalid
+  port: 5432
+  name: heos_control
+  user: heos_runtime
+  credentialsSecret: heos-control-database
+  passwordKey: password
+  caSecret: heos-control-database-ca
+  caKey: ca.crt
+  maxConnections: 4
+  timeoutSeconds: 5
+  lockTimeoutSeconds: 2
+shutdownSeconds: 25
+terminationGracePeriodSeconds: 30
+resources:
+  requests:
+    cpu: 25m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 128Mi
+networkPolicy:
+  enabled: true
+  # Empty peer lists deny all API ingress / database egress. Replace with
+  # namespace+pod selectors or explicit /32 CIDRs before deployment.
+  apiPeers: []
+  databasePeers: []
+  heosPeers: []
+
+# Always rendered. Owner credentials must be provisioned separately from runtime.
+migration:
+  user: heos_owner
+  credentialsSecret: heos-control-migration-database
+  passwordKey: password
+  serviceAccountName: ""
+  activeDeadlineSeconds: 300
+  # Helm runs before install/upgrade; external delivery supplies its own annotations.
+  hooks: helm
+  jobAnnotations: {}
+  resourceAnnotations: {}
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 128Mi

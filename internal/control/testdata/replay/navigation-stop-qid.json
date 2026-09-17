@@ -1,0 +1,149 @@
+{
+  "version": 1,
+  "name": "navigation-stop-qid",
+  "family": "navigation",
+  "provenance": "reconstructed",
+  "source": "docs/DEVICE_COMPATIBILITY.md",
+  "model": "Home 150",
+  "firmware": null,
+  "notes": [
+    "Reconstructs the 2026-09-09 full-lifecycle/event-driven findings: Stop or unknown may accompany navigation with an owned MID and transitional QID.",
+    "Stop at 4000 ms, Play at 4500 ms and selected track-2/QID2 are synthesized to test the accepted same-queue resume policy."
+  ],
+  "initial": {
+    "state": "pause",
+    "volume": 20,
+    "muted": false,
+    "repeat": "off",
+    "shuffle": false
+  },
+  "automation": {
+    "target_level": 12,
+    "ramp_seconds": 1,
+    "duration_seconds": 8,
+    "fade_seconds": 1
+  },
+  "scripts": [
+    {
+      "on": "browse/add_to_queue",
+      "occurrence": 1,
+      "args": {
+        "pid": "1",
+        "sid": "900",
+        "cid": "green",
+        "aid": "4"
+      },
+      "steps": [
+        {
+          "at_ms": 0,
+          "action": "apply",
+          "patch": {
+            "state": "play",
+            "queue": "selected",
+            "media": {
+              "mid": "track-1",
+              "qid": "1",
+              "source": "1024"
+            }
+          }
+        },
+        {
+          "at_ms": 0,
+          "action": "reply",
+          "result": "success"
+        },
+        {
+          "at_ms": 4000,
+          "action": "apply",
+          "patch": {
+            "state": "stop",
+            "media": {
+              "mid": "track-1",
+              "qid": "2",
+              "source": "1024"
+            }
+          }
+        },
+        {
+          "at_ms": 4000,
+          "action": "event",
+          "event": {
+            "command": "event/player_now_playing_changed",
+            "params": {
+              "pid": "1"
+            }
+          }
+        },
+        {
+          "at_ms": 4000,
+          "action": "event",
+          "event": {
+            "command": "event/player_state_changed",
+            "params": {
+              "pid": "1",
+              "state": "stop"
+            }
+          }
+        },
+        {
+          "at_ms": 4500,
+          "action": "apply",
+          "patch": {
+            "state": "play",
+            "media": {
+              "mid": "track-2",
+              "qid": "2",
+              "source": "1024"
+            }
+          }
+        },
+        {
+          "at_ms": 4500,
+          "action": "event",
+          "event": {
+            "command": "event/player_state_changed",
+            "params": {
+              "pid": "1",
+              "state": "play"
+            }
+          }
+        },
+        {
+          "at_ms": 4500,
+          "action": "event",
+          "event": {
+            "command": "event/player_now_playing_changed",
+            "params": {
+              "pid": "1"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "state": "succeeded",
+    "reason": "completed",
+    "volume_levels": [
+      10,
+      11,
+      12,
+      9,
+      6,
+      3,
+      0
+    ],
+    "max_full_reads": 8,
+    "max_scalar_reads": 0,
+    "max_wire_gets": 65,
+    "max_wire_writes": 11,
+    "end_ms": 8000,
+    "no_writes": [
+      {
+        "from_ms": 4000,
+        "until_ms": 4500
+      }
+    ],
+    "queue_writes": 1
+  }
+}

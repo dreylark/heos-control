@@ -1,0 +1,123 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "heos-control.name" . }}
+  {{- with .Values.deploymentAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "heos-control.selector" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "heos-control.selector" . | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "heos-control.name" . }}
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: heos-control
+          image: {{ include "heos-control.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          ports:
+            - name: https
+              containerPort: {{ .Values.api.port }}
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: https
+              scheme: HTTPS
+            timeoutSeconds: 2
+            periodSeconds: 10
+          startupProbe:
+            httpGet:
+              path: /livez
+              port: https
+              scheme: HTTPS
+            timeoutSeconds: 2
+            periodSeconds: 2
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: https
+              scheme: HTTPS
+            timeoutSeconds: {{ add .Values.database.timeoutSeconds 1 }}
+            periodSeconds: {{ max 10 (add .Values.database.timeoutSeconds 2) }}
+            failureThreshold: 1
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            {{- if .Values.api.credentialsSecret }}
+            - name: credentials
+              mountPath: /etc/heos-control/credentials
+              readOnly: true
+            {{- end }}
+            - name: config
+              mountPath: /etc/heos-control/config.json
+              subPath: config.json
+              readOnly: true
+            - name: api-tls
+              mountPath: /etc/heos-control/api-tls
+              readOnly: true
+            - name: database
+              mountPath: /etc/heos-control/database
+              readOnly: true
+            - name: database-ca
+              mountPath: /etc/heos-control/database-ca
+              readOnly: true
+      volumes:
+        {{- if .Values.api.credentialsSecret }}
+        - name: credentials
+          secret:
+            secretName: {{ .Values.api.credentialsSecret }}
+            defaultMode: 0440
+            items:
+              - key: credentials.json
+                path: credentials.json
+        {{- end }}
+        - name: config
+          configMap:
+            name: {{ include "heos-control.name" . }}
+        - name: api-tls
+          secret:
+            secretName: {{ .Values.api.tlsSecret }}
+            defaultMode: 0440
+        - name: database
+          secret:
+            secretName: {{ .Values.database.credentialsSecret }}
+            defaultMode: 0440
+            items:
+              - key: {{ .Values.database.passwordKey }}
+                path: password
+        - name: database-ca
+          secret:
+            secretName: {{ .Values.database.caSecret }}
+            defaultMode: 0440
+            items:
+              - key: {{ .Values.database.caKey }}
+                path: ca.crt

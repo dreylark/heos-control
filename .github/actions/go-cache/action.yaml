@@ -1,0 +1,89 @@
+name: Go with separate module and build caches
+description: Pin Go and reuse dependency archives independently of source compilation.
+inputs:
+  workload:
+    description: Stable cache namespace for this compilation workload
+    required: true
+  tooling:
+    description: Include the isolated generator/formatter modules in dependency keys
+    default: "false"
+outputs:
+  module-key:
+    description: Primary module cache key for explicit save
+    value: ${{ steps.modules.outputs.cache-primary-key }}
+  module-hit:
+    description: Whether the exact module cache key was restored
+    value: ${{ steps.modules.outputs.cache-hit }}
+  build-key:
+    description: Primary compilation cache key for explicit save
+    value: ${{ steps.build.outputs.cache-primary-key }}
+  build-hit:
+    description: Whether the exact compilation cache key was restored
+    value: ${{ steps.build.outputs.cache-hit }}
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+      id: go
+      with:
+        go-version-file: go.mod
+        cache: false
+
+    - name: Locate caches and identify inputs
+      id: keys
+      shell: bash
+      env:
+        CACHE_WORKLOAD: ${{ inputs.workload }}
+        CACHE_PLATFORM: ${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}
+        DEPENDENCY_HASH: ${{ inputs.tooling == 'true' && hashFiles('go.mod', 'go.sum', 'tools/*/go.mod',
+          'tools/*/go.sum', 'Makefile') || hashFiles('go.mod', 'go.sum') }}
+        # Embedded assets and build scripts matter too; unrelated documentation and
+        # workflow edits must not create another compilation archive.
+        SOURCE_HASH: ${{ hashFiles('cmd/**', 'internal/**', 'api/**', 'scripts/**', 'tests/**', 'charts/**',
+          'Dockerfile', 'Makefile', '.dockerignore', '.github/actions/**') }}
+      run: |
+        cache_root="$RUNNER_TEMP/heos-go/$CACHE_WORKLOAD"
+        mkdir -p "$cache_root/build" "$cache_root/mod"
+        echo "GOCACHE=$cache_root/build" >> "$GITHUB_ENV"
+        echo "GOMODCACHE=$cache_root/mod" >> "$GITHUB_ENV"
+        echo "GOTOOLCHAIN=local" >> "$GITHUB_ENV"
+        echo "prefix=$CACHE_PLATFORM-$CACHE_WORKLOAD" >> "$GITHUB_OUTPUT"
+        echo "dependencies=$DEPENDENCY_HASH" >> "$GITHUB_OUTPUT"
+        echo "source=$SOURCE_HASH" >> "$GITHUB_OUTPUT"
+
+    - name: Restore downloaded modules
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+      id: modules
+      with:
+        path: ${{ env.GOMODCACHE }}
+        key: go-modules-v3-${{ steps.keys.outputs.prefix }}-${{ steps.keys.outputs.dependencies }}
+        restore-keys: |
+          go-modules-v3-${{ steps.keys.outputs.prefix }}-
+
+    - name: Restore compiled packages
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+      id: build
+      with:
+        path: ${{ env.GOCACHE }}
+        key: go-build-v3-${{ steps.keys.outputs.prefix }}-${{ steps.keys.outputs.dependencies }}-${{ steps.keys.outputs.source
+          }}
+        restore-keys: |
+          go-build-v3-${{ steps.keys.outputs.prefix }}-${{ steps.keys.outputs.dependencies }}-
+          go-build-v3-${{ steps.keys.outputs.prefix }}-
+
+    - name: Report Go cache restoration separately from Docker layer caching
+      shell: bash
+      env:
+        MODULE_RESULT: ${{ steps.modules.outputs.cache-hit == 'true' && 'exact key' || steps.modules.outputs.cache-matched-key
+          != '' && 'compatible key' || 'miss' }}
+        BUILD_RESULT: ${{ steps.build.outputs.cache-hit == 'true' && 'exact key' || steps.build.outputs.cache-matched-key
+          != '' && 'compatible key' || 'miss' }}
+        MODULE_KEY: ${{ steps.modules.outputs.cache-matched-key }}
+        BUILD_KEY: ${{ steps.build.outputs.cache-matched-key }}
+      run: |
+        {
+          printf '### Go caches\n\n| Cache | Restore result | Restored key |\n| --- | --- | --- |\n'
+          printf '| Downloaded modules | %s | %s |\n' "$MODULE_RESULT" "${MODULE_KEY:-none}"
+          printf '| Compiled packages | %s | %s |\n\n' "$BUILD_RESULT" "${BUILD_KEY:-none}"
+          printf 'These are archive restore results, not Go compiler hit percentages. Buildx reports Docker layer reuse separately; Go compiles outside Buildx with the restored directories mounted.\n'
+        } | tee -a "$GITHUB_STEP_SUMMARY"

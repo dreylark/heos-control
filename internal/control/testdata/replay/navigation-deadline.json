@@ -1,0 +1,112 @@
+{
+  "version": 1,
+  "name": "navigation-deadline",
+  "family": "navigation",
+  "provenance": "synthetic",
+  "source": "docs/DEVICE_COMPATIBILITY.md",
+  "model": "Home 150",
+  "firmware": null,
+  "notes": [
+    "Synthetic failure variation of navigation-stop-qid: Stop/hybrid media never settle before the original eight-second playback deadline.",
+    "Waiting must release ownership without cleanup or extending the envelope."
+  ],
+  "initial": {
+    "state": "pause",
+    "volume": 20,
+    "muted": false,
+    "repeat": "off",
+    "shuffle": false
+  },
+  "automation": {
+    "target_level": 12,
+    "ramp_seconds": 1,
+    "duration_seconds": 8,
+    "fade_seconds": 1
+  },
+  "scripts": [
+    {
+      "on": "browse/add_to_queue",
+      "occurrence": 1,
+      "args": {
+        "pid": "1",
+        "sid": "900",
+        "cid": "green",
+        "aid": "4"
+      },
+      "steps": [
+        {
+          "at_ms": 0,
+          "action": "apply",
+          "patch": {
+            "state": "play",
+            "queue": "selected",
+            "media": {
+              "mid": "track-1",
+              "qid": "1",
+              "source": "1024"
+            }
+          }
+        },
+        {
+          "at_ms": 0,
+          "action": "reply",
+          "result": "success"
+        },
+        {
+          "at_ms": 4000,
+          "action": "apply",
+          "patch": {
+            "state": "stop",
+            "media": {
+              "mid": "track-1",
+              "qid": "2",
+              "source": "1024"
+            }
+          }
+        },
+        {
+          "at_ms": 4000,
+          "action": "event",
+          "event": {
+            "command": "event/player_now_playing_changed",
+            "params": {
+              "pid": "1"
+            }
+          }
+        },
+        {
+          "at_ms": 4000,
+          "action": "event",
+          "event": {
+            "command": "event/player_state_changed",
+            "params": {
+              "pid": "1",
+              "state": "stop"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "state": "released",
+    "reason": "queue_transition_timeout",
+    "volume_levels": [
+      10,
+      11,
+      12
+    ],
+    "max_full_reads": 9,
+    "max_scalar_reads": 0,
+    "max_wire_gets": 65,
+    "max_wire_writes": 6,
+    "end_ms": 8000,
+    "no_writes": [
+      {
+        "from_ms": 4000,
+        "until_ms": 100000
+      }
+    ],
+    "queue_writes": 1
+  }
+}

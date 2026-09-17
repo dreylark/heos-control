@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "name": "confirmation-short-window",
+  "family": "confirmation",
+  "provenance": "synthetic",
+  "source": "docs/DEVICE_COMPATIBILITY.md",
+  "model": "Home 150",
+  "firmware": null,
+  "notes": [
+    "Synthetic variation of the scalar confirmation contract documented in the reference, not a captured fault.",
+    "The second volume setter applies without an event; remaining playback time is too short for the fallback reserve.",
+    "Initial state, causal reply order and relative timing are constructed for this test."
+  ],
+  "initial": {
+    "state": "pause",
+    "volume": 20,
+    "muted": false,
+    "repeat": "off",
+    "shuffle": false
+  },
+  "automation": {
+    "target_level": 12,
+    "ramp_seconds": 1,
+    "duration_seconds": 3,
+    "fade_seconds": 1
+  },
+  "scripts": [
+    {
+      "on": "player/set_volume",
+      "occurrence": 2,
+      "args": {
+        "level": "11",
+        "pid": "1"
+      },
+      "steps": [
+        {
+          "at_ms": 0,
+          "action": "apply",
+          "patch": {
+            "volume": 11
+          }
+        },
+        {
+          "at_ms": 0,
+          "action": "reply",
+          "result": "success"
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "state": "uncertain",
+    "reason": "confirmation_timeout",
+    "volume_levels": [
+      10,
+      11
+    ],
+    "max_full_reads": 3,
+    "max_scalar_reads": 0,
+    "max_wire_gets": 65,
+    "max_wire_writes": 5,
+    "end_ms": 3000,
+    "queue_writes": 1
+  }
+}

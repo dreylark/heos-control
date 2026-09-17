@@ -1,0 +1,41 @@
+version: "2"
+
+run:
+  timeout: 5m
+  # Analyze optional test packages too; lint never executes their tests.
+  build-tags:
+    - integration
+    - chart
+    - ci
+
+linters:
+  default: none
+  enable:
+    - bodyclose
+    - durationcheck
+    - errcheck
+    - errorlint
+    - fatcontext
+    - govet
+    - ineffassign
+    - makezero
+    - nilerr
+    - nilnesserr
+    - nolintlint
+    - sqlclosecheck
+    - staticcheck
+    - unused
+  settings:
+    staticcheck:
+      # Include style checks and readability quick fixes.
+      checks:
+        - all
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+  exclusions:
+    generated: strict
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

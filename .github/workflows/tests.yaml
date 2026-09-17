@@ -1,0 +1,106 @@
+name: Tests and coverage
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - uses: ./.github/actions/go-cache
+        id: go-cache
+        with:
+          workload: tests
+
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
+        with:
+          version: v4.2.4
+
+      - name: Check Helm chart
+        run: go test -v -tags=chart -count=1 ./tests/chart
+
+      - name: Test release gate and CI compilation steps
+        run: |
+          node --test scripts/ci/*.test.cjs
+          go test -v -count=1 -tags=ci ./tests/ci
+
+      - name: Test packages outside service coverage
+        run: go test -v -race -count=1 ./api/... ./scripts/... ./tests/build
+
+      - name: Create disposable TLS credentials and database configs
+        run: go run ./scripts/devsetup
+
+      - name: Start disposable PostgreSQL
+        run: docker compose up -d --wait postgres
+
+      - name: Prepare service coverage output
+        run: |
+          rm -rf coverage
+          mkdir coverage
+          test -r .local/test-owner.json
+          test -r .local/test-runtime.json
+          go list ./cmd/... ./internal/... > coverage/scope.txt
+          go version > coverage/toolchain.txt
+          git rev-parse HEAD > coverage/revision.txt
+          if [ -n "$(git status --porcelain)" ]; then echo dirty >> coverage/revision.txt; fi
+
+      - name: Run service unit and PostgreSQL integration tests with race and coverage
+        id: service-tests
+        run: |
+          export HEOS_TEST_OWNER_CONFIG="$PWD/.local/test-owner.json"
+          export HEOS_TEST_RUNTIME_CONFIG="$PWD/.local/test-runtime.json"
+          go test -v -race -count=1 -tags=integration -covermode=atomic \
+            -coverpkg="$(paste -sd, coverage/scope.txt)" -coverprofile=coverage/coverage.raw.out ./cmd/... ./internal/...
+
+      - name: Enforce coverage thresholds
+        id: coverage
+        run: go run ./scripts/coverage
+
+      - name: Render coverage reports
+        if: ${{ !cancelled() && (steps.coverage.outcome == 'success' || steps.coverage.outcome == 'failure')
+          }}
+        run: |
+          go tool cover -func=coverage/coverage.out > coverage/coverage.functions.txt
+          go tool cover -html=coverage/coverage.out -o coverage/coverage.html
+          cat coverage/summary.tsv >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Retain coverage reports
+        if: >-
+          ${{ !cancelled() && (steps.service-tests.outcome == 'success' || steps.service-tests.outcome
+          == 'failure') }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: service-coverage
+          path: coverage/
+          retention-days: 14
+          if-no-files-found: error
+          overwrite: true
+
+      - name: Cleanup disposable environment
+        if: always()
+        run: docker compose --profile app --profile tools --profile tests down -v
+
+      - name: Save downloaded modules after successful checks
+        if: ${{ success() && steps.go-cache.outputs.module-key != '' && steps.go-cache.outputs.module-hit
+          != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          key: ${{ steps.go-cache.outputs.module-key }}
+          path: ${{ env.GOMODCACHE }}
+
+      - name: Save compiled packages even after failed checks
+        if: ${{ !cancelled() && steps.go-cache.outputs.build-key != '' && steps.go-cache.outputs.build-hit
+          != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          key: ${{ steps.go-cache.outputs.build-key }}
+          path: ${{ env.GOCACHE }}

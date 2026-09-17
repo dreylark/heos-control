@@ -1,0 +1,13 @@
+version: "2"
+sql:
+  - engine: postgresql
+    schema: internal/journal/migrations
+    queries: internal/journal/queries
+    analyzer:
+      database: false
+    gen:
+      go:
+        package: dbgen
+        out: internal/journal/dbgen
+        sql_package: pgx/v5
+        omit_unused_structs: true

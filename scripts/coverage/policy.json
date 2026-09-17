@@ -1,0 +1,21 @@
+{
+  "excluded_files": [
+    "github.com/dreylark/heos-control/internal/api/api.gen.go",
+    "github.com/dreylark/heos-control/internal/journal/dbgen/db.go",
+    "github.com/dreylark/heos-control/internal/journal/dbgen/doctor.sql.go",
+    "github.com/dreylark/heos-control/internal/journal/dbgen/history.sql.go",
+    "github.com/dreylark/heos-control/internal/journal/dbgen/migrations.sql.go",
+    "github.com/dreylark/heos-control/internal/journal/dbgen/operations.sql.go"
+  ],
+  "total_minimum": 84,
+  "package_minimums": {
+    "github.com/dreylark/heos-control/cmd/heos-control": 59,
+    "github.com/dreylark/heos-control/internal/api": 83,
+    "github.com/dreylark/heos-control/internal/app": 77,
+    "github.com/dreylark/heos-control/internal/config": 85,
+    "github.com/dreylark/heos-control/internal/control": 83,
+    "github.com/dreylark/heos-control/internal/heos": 87,
+    "github.com/dreylark/heos-control/internal/journal": 82,
+    "github.com/dreylark/heos-control/internal/telemetry": 90
+  }
+}

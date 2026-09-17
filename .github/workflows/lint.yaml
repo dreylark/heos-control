@@ -1,0 +1,76 @@
+name: Static checks
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - uses: ./.github/actions/go-cache
+        id: go-cache
+        with:
+          workload: lint
+          tooling: "true"
+
+      - name: Check Go formatting
+        run: test -z "$(gofmt -l cmd internal scripts tests)"
+
+      - name: Check workflow formatting
+        run: go -C tools/yamlfmt tool yamlfmt -conf ../../.yamlfmt -lint ../../.github/workflows ../../.github/actions
+          ../../.github/actionlint.yaml ../../.github/dependabot.yaml ../../.golangci.yaml
+
+      - name: Lint GitHub Actions workflows
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+
+      - name: Lint shell scripts
+        run: shellcheck scripts/*.sh
+
+      - name: Validate artifact and release versions
+        id: release
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          version=$(go run ./scripts/release -tag "${RELEASE_TAG:-v$(cat VERSION)}")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Check SQL generation
+        run: go -C tools/sqlc tool sqlc diff -f ../../sqlc.yaml
+
+      - name: Check OpenAPI generation
+        run: |
+          output=$(mktemp)
+          trap 'rm -f "$output"' EXIT
+          go -C tools/oapi-codegen tool oapi-codegen -config ../../api/oapi-codegen.yaml -o "$output" ../../api/openapi.yaml
+          diff -u internal/api/api.gen.go "$output"
+
+      - name: Analyze Go code and tagged tests
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a  # v9.3.0
+        with:
+          version-file: .golangci-lint-version
+          args: ./...
+
+      - name: Save downloaded modules after successful checks
+        if: ${{ success() && steps.go-cache.outputs.module-key != '' && steps.go-cache.outputs.module-hit
+          != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          key: ${{ steps.go-cache.outputs.module-key }}
+          path: ${{ env.GOMODCACHE }}
+
+      - name: Save compiled packages even after failed checks
+        if: ${{ !cancelled() && steps.go-cache.outputs.build-key != '' && steps.go-cache.outputs.build-hit
+          != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          key: ${{ steps.go-cache.outputs.build-key }}
+          path: ${{ env.GOCACHE }}

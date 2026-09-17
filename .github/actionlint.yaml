@@ -1,0 +1,6 @@
+# actionlint v1.7.12 predates this GitHub-hosted public-preview label.
+# This only extends lint validation; jobs still use GitHub-hosted AMD64 runners.
+# Remove the entry once the pinned actionlint recognizes ubuntu-26.04.
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04

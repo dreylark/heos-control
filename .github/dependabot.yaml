@@ -1,0 +1,62 @@
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directories:
+      - "/"
+      - "/tools/oapi-codegen"
+      - "/tools/sqlc"
+      - "/tools/yamlfmt"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    # Isolated Go tool modules declare their dependencies as indirect.
+    allow:
+      - dependency-type: all
+    groups:
+      go-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: github-actions
+    directories:
+      - "/"
+      - "/.github/actions/go-cache"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    groups:
+      actions-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    groups:
+      images-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: docker-compose
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    # heos-control:dev and heos-control:test are locally built images.
+    allow:
+      - dependency-name: postgres

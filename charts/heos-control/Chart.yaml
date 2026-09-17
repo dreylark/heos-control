@@ -1,0 +1,11 @@
+apiVersion: v2
+name: heos-control
+description: Single HEOS controller with external PostgreSQL
+home: https://github.com/dreylark/heos-control
+sources:
+  - https://github.com/dreylark/heos-control
+annotations:
+  artifacthub.io/license: MIT
+type: application
+version: 0.9.3
+appVersion: 0.9.3

@@ -1,0 +1,97 @@
+{
+  "version": 1,
+  "name": "loading-unresolved-timeout",
+  "family": "loading",
+  "provenance": "synthetic",
+  "source": "docs/DEVICE_COMPATIBILITY.md",
+  "model": "Home 150",
+  "firmware": null,
+  "notes": [
+    "Synthetic failure variation of loading-unknown: selected queue becomes visible but Play never arrives.",
+    "Keep the initial 12-second confirmation deadline; successful continuation is deliberately absent."
+  ],
+  "initial": {
+    "state": "pause",
+    "volume": 20,
+    "muted": false,
+    "repeat": "off",
+    "shuffle": false
+  },
+  "automation": {
+    "target_level": 12,
+    "ramp_seconds": 1,
+    "duration_seconds": 3,
+    "fade_seconds": 1
+  },
+  "scripts": [
+    {
+      "on": "browse/add_to_queue",
+      "occurrence": 1,
+      "args": {
+        "sid": "900",
+        "cid": "green",
+        "aid": "4",
+        "pid": "1"
+      },
+      "steps": [
+        {
+          "at_ms": 0,
+          "action": "reply",
+          "result": "success"
+        },
+        {
+          "at_ms": 330,
+          "action": "apply",
+          "patch": {
+            "state": "unknown",
+            "queue": "selected",
+            "media": {
+              "mid": "loading-mid",
+              "qid": "2",
+              "source": "1024"
+            }
+          }
+        },
+        {
+          "at_ms": 330,
+          "action": "event",
+          "event": {
+            "command": "event/player_queue_changed",
+            "params": {
+              "pid": "1"
+            }
+          }
+        },
+        {
+          "at_ms": 330,
+          "action": "event",
+          "event": {
+            "command": "event/player_now_playing_changed",
+            "params": {
+              "pid": "1"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "state": "uncertain",
+    "reason": "confirmation_timeout",
+    "volume_levels": [
+      10
+    ],
+    "max_full_reads": 17,
+    "max_scalar_reads": 0,
+    "max_wire_gets": 65,
+    "max_wire_writes": 4,
+    "end_ms": 12000,
+    "no_writes": [
+      {
+        "from_ms": 1,
+        "until_ms": 100000
+      }
+    ],
+    "queue_writes": 1
+  }
+}

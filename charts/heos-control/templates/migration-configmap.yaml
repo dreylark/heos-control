@@ -1,0 +1,29 @@
+{{- $db := .Values.database }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  annotations:
+    {{- include "heos-control.migrationResourceAnnotations" . | nindent 4 }}
+  labels:
+    app.kubernetes.io/component: migration
+  name: {{ .Release.Name }}-migration
+data:
+  # The CLI validates API path fields but migrate never opens them or starts HTTP.
+  config.json: |
+    {
+      "listen": ":{{ .Values.api.port }}",
+      "shutdown_seconds": {{ .Values.shutdownSeconds }},
+      "cert_file": "/etc/heos-control/api-tls/tls.crt",
+      "key_file": "/etc/heos-control/api-tls/tls.key",
+      "database": {
+        "host": {{ $db.host | toJson }},
+        "port": {{ $db.port }},
+        "name": {{ $db.name | toJson }},
+        "user": {{ .Values.migration.user | toJson }},
+        "password_file": "/etc/heos-control/database/password",
+        "ca_file": "/etc/heos-control/database-ca/ca.crt",
+        "max_connections": 1,
+        "timeout_seconds": {{ $db.timeoutSeconds }},
+        "lock_timeout_seconds": {{ $db.lockTimeoutSeconds }}
+      }
+    }

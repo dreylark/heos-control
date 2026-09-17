@@ -1,0 +1,140 @@
+name: Prepare release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version change (explicit uses the version field)
+        required: true
+        type: choice
+        default: patch
+        options:
+          - patch
+          - minor
+          - major
+          - explicit
+      version:
+        description: Exact SemVer without v, only for explicit (for example 0.9.0-rc.1)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prepare-release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: ./.github/actions/go-cache
+        id: go-cache
+        with:
+          workload: prepare-release
+          tooling: "true"
+
+      - name: Prepare and validate source versions
+        id: version
+        env:
+          BUMP: ${{ inputs.bump }}
+          EXPLICIT_VERSION: ${{ inputs.version }}
+        run: |
+          previous=$(cat VERSION)
+          version=$(go run ./scripts/release -prepare "$BUMP" -version "$EXPLICIT_VERSION")
+          if git show-ref --verify --quiet "refs/tags/v$version"; then
+            echo "Tag v$version already exists" >&2
+            exit 1
+          fi
+          echo "previous=$previous" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Generate OpenAPI bindings
+        run: go -C tools/oapi-codegen tool oapi-codegen -config ../../api/oapi-codegen.yaml -o ../../internal/api/api.gen.go
+          ../../api/openapi.yaml
+
+      - name: Validate synchronized release versions
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: go run ./scripts/release -tag "v$RELEASE_VERSION"
+
+      - name: Test release preparation and packaging
+        run: go test -v -race ./scripts/release
+
+      - name: Check patch whitespace
+        run: git diff --check
+
+      - name: Reject a stale preparation base
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          current=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$BASE_BRANCH" --jq .object.sha)
+          if [ "$current" != "$GITHUB_SHA" ]; then
+            echo "Default branch changed during preparation; rerun from its new head" >&2
+            exit 1
+          fi
+
+      - name: Create release pull request
+        id: pr
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1  # v8.1.1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          base: ${{ github.event.repository.default_branch }}
+          branch: release/v${{ steps.version.outputs.version }}
+          commit-message: "chore: prepare release v${{ steps.version.outputs.version }}"
+          title: "chore: prepare release v${{ steps.version.outputs.version }}"
+          add-paths: |
+            VERSION
+            charts/heos-control/Chart.yaml
+            api/openapi.yaml
+            internal/api/api.gen.go
+          body: |
+            Prepare **v${{ steps.version.outputs.version }}** from **${{ steps.version.outputs.previous }}**.
+
+            Synchronizes VERSION, Helm version/appVersion and OpenAPI info.version;
+            regenerates API bindings. OpenAPI specification version is unchanged.
+
+            Validation: synchronized versions, regenerated API bindings and release-tool
+            race tests. Approve the native PR workflow if GitHub requests it; its full CI
+            checks the merge commit with lint, tests and container qualification.
+
+            Review compatibility and release notes, wait for CI, then merge manually.
+            Create and publish GitHub Release `v${{ steps.version.outputs.version }}`
+            from the merged commit to publish the image and chart. No release or
+            registry artifact is created by this PR workflow.
+
+      - name: Summarize release pull request
+        if: steps.pr.outputs.pull-request-number != ''
+        env:
+          PR_URL: ${{ steps.pr.outputs.pull-request-url }}
+        run: |
+          printf 'Release PR: %s\n\nApprove the PR workflow if GitHub requests it, then wait for full CI before merging. Publish the release manually after the merge.\n' "$PR_URL" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Save downloaded modules after successful checks
+        if: ${{ success() && steps.go-cache.outputs.module-key != '' && steps.go-cache.outputs.module-hit
+          != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          key: ${{ steps.go-cache.outputs.module-key }}
+          path: ${{ env.GOMODCACHE }}
+
+      - name: Save compiled packages even after failed checks
+        if: ${{ !cancelled() && steps.go-cache.outputs.build-key != '' && steps.go-cache.outputs.build-hit
+          != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          key: ${{ steps.go-cache.outputs.build-key }}
+          path: ${{ env.GOCACHE }}

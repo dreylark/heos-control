@@ -1,0 +1,74 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-migrate
+  annotations:
+    {{- include "heos-control.migrationJobAnnotations" . | nindent 4 }}
+  labels:
+    app.kubernetes.io/name: heos-control-migration
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  # A failed hook blocks rollout and remains available for diagnosis.
+  backoffLimit: 0
+  activeDeadlineSeconds: {{ .Values.migration.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: heos-control-migration
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      serviceAccountName: {{ include "heos-control.migrationServiceAccount" . }}
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      terminationGracePeriodSeconds: 30
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: migrate
+          image: {{ include "heos-control.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["migrate", "-config", "/etc/heos-control/config/config.json"]
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          resources:
+            {{- toYaml .Values.migration.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/heos-control/config
+              readOnly: true
+            - name: database
+              mountPath: /etc/heos-control/database
+              readOnly: true
+            - name: database-ca
+              mountPath: /etc/heos-control/database-ca
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: {{ .Release.Name }}-migration
+        - name: database
+          secret:
+            secretName: {{ .Values.migration.credentialsSecret }}
+            defaultMode: 0440
+            items:
+              - key: {{ .Values.migration.passwordKey }}
+                path: password
+        - name: database-ca
+          secret:
+            secretName: {{ .Values.database.caSecret }}
+            defaultMode: 0440
+            items:
+              - key: {{ .Values.database.caKey }}
+                path: ca.crt
