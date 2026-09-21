@@ -7,5 +7,5 @@ sources:
 annotations:
   artifacthub.io/license: MIT
 type: application
-version: 0.9.3
-appVersion: 0.9.3
+version: 0.10.0
+appVersion: 0.10.0
