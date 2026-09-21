@@ -96,6 +96,11 @@ func syntheticHEOS(t *testing.T) (string, string, *atomic.Int64) {
 
 func syntheticHEOSWithHook(t *testing.T, afterReply func(net.Conn, string)) (string, string, *atomic.Int64) {
 	t.Helper()
+	return syntheticHEOSWithReplies(t, nil, afterReply)
+}
+
+func syntheticHEOSWithReplies(t *testing.T, customize func(string, url.Values, any) any, afterReply func(net.Conn, string)) (string, string, *atomic.Int64) {
+	t.Helper()
 	seed := httptest.NewTLSServer(http.NotFoundHandler())
 	cert := seed.TLS.Certificates[0]
 	seed.Close()
@@ -176,6 +181,9 @@ func syntheticHEOSWithHook(t *testing.T, afterReply func(net.Conn, string)) (str
 					default:
 						writes.Add(1)
 						result = "fail"
+					}
+					if customize != nil {
+						payload = customize(command, params, payload)
 					}
 					b, _ := json.Marshal(map[string]any{"heos": map[string]string{"command": command, "result": result, "message": params.Encode()}, "payload": payload})
 					if _, e = c.Write(append(b, '\r', '\n')); e != nil {

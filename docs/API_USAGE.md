@@ -30,6 +30,55 @@ Player results include availability, freshness, an observation revision,
 capabilities and visible active operation. Unknown/stale state does not authorize
 writes. The revision is also exposed as a quoted `ETag` on player detail.
 
+Player list, detail and preflight always include `now_playing`. For example,
+the field can contain:
+
+```json
+{
+  "song": "Example track",
+  "album": "Example album",
+  "artist": "Example artist",
+  "queue_id": "2",
+  "media_id": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "stale": false
+}
+```
+
+Clients that validate responses against an older strict schema need the updated
+OpenAPI contract containing this field.
+
+Play and Pause retain observed media. Stop, unknown state, disconnection and
+absence of a verified observation for the current connection return `null`.
+An object with empty song/album/artist strings means the device supplied media
+with incomplete labels; it differs from `null`. While connected Play/Pause is
+being verified, the last known object remains available with `stale: true`.
+It is display data, not confirmed new media. A state-only return from Stop or
+unknown to Play cannot make old metadata fresh; that requires an accepted media
+read while playing or paused. Until then it can remain stale, including until
+the existing background audit if no new metadata event arrives.
+
+`queue_id` is optional and identifies an entry within this player's current
+queue. `media_id` is an optional opaque service identifier derived from native
+media identity, without exposing the native ID or a media URL. It supports
+equality within the same player/source and running process; display-text changes
+do not change it, but a service restart may. Repeated occurrences of the same
+media may have different queue IDs. Neither identifier is a playable `item_ref`
+or a Gerbera library ID. Missing identifiers are omitted.
+
+Media identity, labels and freshness participate in player `revision` and the
+detail ETag. A metadata change can therefore invalidate `If-Match` for a new
+mutation; accepted retries keep their original key and input. Revision is an
+opaque equality token, not a track identifier or a numeric sequence.
+`Player.observed_at` remains the last full-observation time; targeted metadata
+updates do not renew it. There is no separate media timestamp or progress value.
+
+Current media comes from the native now-playing read, without inferring queue
+position. Firmware can briefly report mixed media/queue identifiers, so even
+fresh display data does not establish atomic queue membership or playback
+ownership. Queue pages are not current-track evidence. To continue a queue
+traversal, pass `next_offset` with its `revision`; restart at offset zero after
+`stale_reference`, including when a media change advances the player revision.
+
 Catalog references are opaque and expire: pass a browsable element's
 `item_ref` as the next request's `parent_ref`, and follow returned `next_cursor`
 values for pagination, including every page needed for your selection. Use
@@ -39,7 +88,9 @@ match, or assume a displayed album has complete playable membership.
 
 ## Prepare and submit playback
 
-The client selects one playable container and retains its current `item_ref`.
+The client selects a playable media item or container and retains its current
+`item_ref`. A catalog item with `kind: media` and `playable: true` can start a
+single song/track through the same playback endpoint.
 The same body is accepted by preflight and playback. This is an illustrative
 request; choose levels within the player's verified ceiling:
 
@@ -210,3 +261,24 @@ resources; they are not a durable history or proof that a command succeeded.
 Reconnect with `Last-Event-ID` when available and refresh snapshots after a gap.
 Read clients must handle unknown/stale observations without treating them as
 permission to write. Slow subscribers are bounded and can be disconnected.
+
+`player_changed` covers current-media identity, display-text and freshness
+changes as well as other player state. Its data remains identifier-only:
+
+```text
+event: player_changed
+data: {"player":"room-speaker"}
+```
+
+Refetch that player and compare confirmed `now_playing` identity, queue entry
+and labels before emitting a consumer `TRACK_CHANGE`. A volume change, audit or
+duplicate native hint is not itself a new track. A refresh can first return
+stale old metadata; verification completion changes the revision and produces
+another invalidation if the first was already published. Null means no usable
+current-media observation, not proof that a Stop command succeeded.
+
+Notifications converge on the latest observed snapshot. The existing 250 ms
+metadata debounce and 500 ms in-memory revision watcher can coalesce rapid
+transitions; SSE is not an exactly-once history of every track. Device response
+time and recovery affect latency. A gap/restart requires fresh snapshots;
+process-scoped media IDs must not be compared across service restarts.

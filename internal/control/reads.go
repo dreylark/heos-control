@@ -73,6 +73,7 @@ type Player struct {
 	Stale           bool         `json:"stale"`
 	Revision        string       `json:"revision"`
 	PlaybackState   string       `json:"playback_state"`
+	NowPlaying      *NowPlaying  `json:"now_playing"`
 	Volume          Volume       `json:"volume"`
 	Muted           *bool        `json:"muted"`
 	Grouped         *bool        `json:"grouped"`
@@ -105,13 +106,15 @@ func (s *Reads) Player(key string) (Player, error) {
 		g := v.Grouped
 		p.Grouped = &g
 	}
+	p.NowPlaying = s.nowPlaying(d.Config, v)
 	// Include freshness and observation identity, not just a socket-local counter.
 	b, _ := json.Marshal(struct {
 		Epoch                      string
 		Token                      heos.Token
 		At                         time.Time
 		Stale, Connected, Verified bool
-	}{s.epoch, v.Token, v.ObservedAt, v.Stale, v.Connected, v.Verified})
+		NowPlaying                 *NowPlaying
+	}{s.epoch, v.Token, v.ObservedAt, v.Stale, v.Connected, v.Verified, p.NowPlaying})
 	p.Revision = fmt.Sprintf("%s-%x", s.epoch, sha256.Sum256(b))
 	return p, nil
 }

@@ -51,6 +51,7 @@ func makeFuzzProjectionCase(selector uint8) fuzzProjectionCase {
 		state := []string{"play", "pause", "stop", "unknown"}[(selector/8)%4]
 		add("state", state)
 		c.want.State = state
+		c.want.MediaStale = state == "stop" || state == "unknown"
 	case 1:
 		c.command = "event/player_volume_changed"
 		level, mute := int(selector)%101, selector&16 != 0
@@ -77,6 +78,7 @@ func makeFuzzProjectionCase(selector uint8) fuzzProjectionCase {
 		c.want.Shuffle = shuffle
 	case 4:
 		c.command = "event/player_now_playing_changed"
+		c.want.MediaStale = true
 	case 5:
 		c.command, c.project = "event/player_now_playing_progress", false
 		add("cur_pos", "9223372036854775808")
