@@ -96,6 +96,17 @@ not renew the audit deadline or repair expired state. Event-driven refreshes
 coalesce over 250 ms. A 60-second idle heartbeat checks the connection without
 renewing state age; failed observation retries back off from one to 30 seconds.
 
+The public player projects this observed media as nullable `now_playing`, using
+a process/player/source-scoped opaque media ID. Stop, unknown and disconnected
+state return null; connected Play/Pause may retain stale metadata during
+verification. Presentation-only media freshness prevents a later Play event
+from making pre-Stop metadata fresh without a native media read. These flags do
+not participate in ownership, write guards or refresh scheduling. The projection
+is part of player revision, so the existing 500 ms in-memory revision watcher
+also emits `player_changed` for metadata updates. SSE remains identifier-only
+and coalesced; the API does not reconstruct an atomic queue snapshot or track
+history from these notifications.
+
 Scalar writes register expectations before sending. Confirmation requires both a
 successful reply and complete matching events for the changed fields, in either
 order. Unchanged fields need no new event. Volume confirmation also handles the

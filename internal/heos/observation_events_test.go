@@ -291,13 +291,17 @@ func TestObservationIncompleteMetadataRequiresFullRecovery(t *testing.T) {
 			if err := o.Refresh(context.Background()); err != nil {
 				t.Fatal(err)
 			}
+			initial := o.Snapshot()
 			deliverObservationEvent(c, o, "event/player_now_playing_changed", "pid=9007199254740993")
 			fail.Store(true)
 			if err := o.refresh(context.Background(), false); err == nil || !o.Snapshot().Stale || full.Load() != 1 {
 				t.Fatal("incomplete metadata was accepted", err, o.Snapshot(), full.Load())
 			}
+			if s := o.Snapshot(); !s.MediaStale || s.Media.ID != initial.Media.ID || s.ObservedAt != initial.ObservedAt {
+				t.Fatal("failed metadata read changed presentation evidence", s)
+			}
 			fail.Store(false)
-			if err := o.refresh(context.Background(), false); err != nil || o.Snapshot().Stale || o.Snapshot().EventUpdated || full.Load() != 2 {
+			if err := o.refresh(context.Background(), false); err != nil || o.Snapshot().Stale || o.Snapshot().MediaStale || o.Snapshot().EventUpdated || full.Load() != 2 {
 				t.Fatal("failed partial read did not require full recovery", err, full.Load())
 			}
 		})

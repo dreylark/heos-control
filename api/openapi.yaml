@@ -194,7 +194,7 @@ paths:
       operationId: getPlayer
       tags: [Players]
       summary: Read player state
-      description: Requires read scope and a grant for this player. Returns an observed snapshot and ETag. Quote the revision in If-Match for a new mutation; admission independently revalidates it.
+      description: Requires read scope and a grant for this player. Returns an observed snapshot and ETag, including current-media identity, display fields and freshness. Quote the revision in If-Match for a new mutation; admission independently revalidates it. Matching idempotent retries resolve before mutable revision checks.
       parameters:
       - &id001
         name: player
@@ -220,7 +220,7 @@ paths:
                 type: string
                 const: no-store
             ETag:
-              description: Quoted state revision including process epoch.
+              description: Quoted Player.revision, including process epoch and the complete now_playing projection. An opaque equality token, not a counter or track ID. Conditional GET is not supported.
               schema:
                 type: string
         default:
@@ -701,10 +701,19 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
-      description: 'Bounded replay. Event kinds: player_changed, operation_changed,
-        snapshot_required. Data contains authorized player and optional operation
-        identifiers only; fetch snapshots after a gap/restart. Slow clients disconnect.
-        Heartbeat every 15 seconds.'
+      description: |
+        Bounded replay. Event kinds: player_changed, operation_changed, snapshot_required.
+        Data contains authorized player and optional operation identifiers only;
+        current-media fields are never included. Refetch the affected player after
+        player_changed, which also invalidates media identity, display fields and
+        freshness. A metadata hint can invalidate retained media before verification;
+        a later accepted native read can invalidate it again when confirmation completes.
+        Changes may coalesce: the guarantee is convergence to the latest observed
+        snapshot, not delivery of every physical track transition or a fixed latency.
+        Compare confirmed media fields and identity before emitting a track-change
+        update; unrelated scalar changes and full audits also change player revision.
+        Refetch authorized snapshots after snapshot_required or a gap/restart.
+        Slow clients disconnect. Heartbeat every 15 seconds.
   /v1/players/{player}/playback:
     post:
       operationId: playback
@@ -1015,6 +1024,7 @@ components:
       - stale
       - revision
       - playback_state
+      - now_playing
       - volume
       - muted
       - grouped
@@ -1032,6 +1042,7 @@ components:
           - offline
           - unknown
         observed_at:
+          description: Time of the last full device observation. Targeted metadata reads and events do not renew this timestamp.
           type:
           - string
           - 'null'
@@ -1039,6 +1050,7 @@ components:
         stale:
           type: boolean
         revision:
+          description: Opaque equality token scoped to the running service. Includes current-media identity, display fields, freshness and object/null changes as well as existing state and observation inputs.
           type: string
           maxLength: 160
         playback_state:
@@ -1048,6 +1060,8 @@ components:
           - play
           - pause
           - stop
+        now_playing:
+          $ref: '#/components/schemas/NowPlaying'
         volume:
           type: object
           additionalProperties: false
@@ -1103,6 +1117,51 @@ components:
           - string
           - 'null'
       x-go-type: control.Player
+      x-go-type-import:
+        path: github.com/dreylark/heos-control/internal/control
+        name: control
+    NowPlaying:
+      description: |
+        Current media from an accepted native observation while playing or paused.
+        Retains last known metadata with stale=true during verification or baseline
+        staleness. Null on Stop, unknown state, connection loss, startup without an
+        established identity/current media observation, or reconnect before a full
+        baseline succeeds. Null does not confirm a successful Stop command. An object
+        with empty display strings is accepted media with incomplete display metadata.
+        Native transport, media and queue reads are not atomic; this projection does
+        not claim that transient native MID/QID combinations have fully settled.
+      type:
+      - object
+      - 'null'
+      additionalProperties: false
+      required:
+      - song
+      - album
+      - artist
+      - stale
+      properties:
+        song:
+          type: string
+          description: Device-provided display title; may be empty.
+        album:
+          type: string
+          description: Device-provided album display name; may be empty.
+        artist:
+          type: string
+          description: Device-provided artist display name; may be empty.
+        queue_id:
+          type: string
+          description: Native queue entry identifier, omitted when unavailable. Scoped to this player and current queue; repeated tracks may have different queue entries.
+        media_id:
+          type: string
+          pattern: ^[a-f0-9]{64}$
+          minLength: 64
+          maxLength: 64
+          description: One-way opaque service identity scoped to the process epoch, configured player and native source/MID. Stable for equal native identity in one process, independent of display text; may change after restart. Omitted when native MID is unavailable. This is not a raw HEOS MID, URL, Gerbera ID, playback argument or playable item_ref, and grants no access.
+        stale:
+          type: boolean
+          description: Last known display data awaiting confirmation or backed by a stale baseline. Always true when Player.stale is true; may also be true while scalar state remains fresh. Never confirms a new track or grants write permission.
+      x-go-type: control.NowPlaying
       x-go-type-import:
         path: github.com/dreylark/heos-control/internal/control
         name: control
@@ -1214,6 +1273,7 @@ components:
         path: github.com/dreylark/heos-control/internal/control
         name: control
     Queue:
+      description: Queue entries are not current-media evidence. Continuation uses Player.revision; any player revision change, including current-media changes, can cause stale_reference. Restart traversal from offset zero after stale_reference.
       type: object
       additionalProperties: false
       required:

@@ -136,6 +136,12 @@ type Snapshot struct {
 	Stale      bool
 	Connected  bool
 	Verified   bool
+	// MediaStale retains display data that needs a native media observation
+	// associated with Play/Pause. It does not affect control verification.
+	MediaStale bool
+	// MediaUnavailable prevents display data from a previous connection baseline
+	// being reused before the current connection establishes physical identity.
+	MediaUnavailable bool
 	// EventUpdated distinguishes a continuously maintained projection or targeted
 	// scalar/metadata read from a complete identity, group and queue audit.
 	EventUpdated bool
@@ -197,6 +203,7 @@ func (o *Observer) Snapshot() Snapshot {
 	view := o.client.PlayerView(s.Player.ID)
 	age := o.now().Sub(s.ObservedAt)
 	s.Connected = view.Connected
+	s.MediaUnavailable = view.Token.Generation != s.Token.Generation
 	s.Stale = o.invalid || o.mediaPending || o.writePending != 0 || !view.Connected || view.Token != s.Token || age < 0 || age >= o.ttl
 	s.Verified = !s.Stale && string(s.Player.Serial) == o.identity.Serial
 	return s
@@ -347,23 +354,24 @@ func (o *Observer) refresh(ctx context.Context, force bool) error {
 		return err
 	}
 	s.Media = &media
+	s.MediaStale = s.State != "play" && s.State != "pause"
 	s.Queue, err = o.client.Queue(ctx, player.ID, 0, 100)
 	if err != nil {
 		return fmt.Errorf("player/get_queue: %w", err)
-	}
-	view = o.client.PlayerView(player.ID)
-	if s.Queue.Token != s.Token || view.Token != s.Token || !view.Connected {
-		return ErrStale
 	}
 	s.ObservedAt = o.now()
 	s.Connected = true
 	s.Verified = true
 	o.mu.Lock()
+	defer o.mu.Unlock()
+	view = o.client.PlayerView(player.ID)
+	if s.Queue.Token != s.Token || view.Token != s.Token || !view.Connected {
+		return ErrStale
+	}
 	o.last = s
 	o.invalid = false
 	o.mediaPending = false
 	o.writePending = 0
 	o.signalChanged()
-	o.mu.Unlock()
 	return nil
 }

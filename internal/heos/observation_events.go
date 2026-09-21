@@ -115,6 +115,9 @@ func applyObservedEvent(s *Snapshot, e Event) bool {
 	switch d.Kind {
 	case EventState:
 		s.State = d.State
+		if d.State == "stop" || d.State == "unknown" {
+			s.MediaStale = true
+		}
 	case EventVolume:
 		s.Volume, s.Muted = &d.Volume, &d.Muted
 	case EventRepeat:
@@ -123,6 +126,7 @@ func applyObservedEvent(s *Snapshot, e Event) bool {
 		s.Shuffle = d.Shuffle
 	case EventNowPlaying:
 		// Metadata is read by the existing coalesced observer loop.
+		s.MediaStale = true
 	default:
 		return false
 	}
@@ -156,6 +160,7 @@ func (o *Observer) refreshMedia(ctx context.Context, s Snapshot) (err error) {
 		return ErrStale
 	}
 	s.Media = &media
+	s.MediaStale = s.State != "play" && s.State != "pause"
 	s.EventUpdated = true
 	o.last = s
 	o.mediaPending = false

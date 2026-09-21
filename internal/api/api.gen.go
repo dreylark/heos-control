@@ -388,6 +388,16 @@ type MuteInput struct {
 	Takeover bool `json:"takeover"`
 }
 
+// NowPlaying Current media from an accepted native observation while playing or paused.
+// Retains last known metadata with stale=true during verification or baseline
+// staleness. Null on Stop, unknown state, connection loss, startup without an
+// established identity/current media observation, or reconnect before a full
+// baseline succeeds. Null does not confirm a successful Stop command. An object
+// with empty display strings is accepted media with incomplete display metadata.
+// Native transport, media and queue reads are not atomic; this projection does
+// not claim that transient native MID/QID combinations have fully settled.
+type NowPlaying = control.NowPlaying
+
 // Operation defines model for Operation.
 type Operation = control.Operation
 
@@ -484,7 +494,7 @@ type Player = control.Player
 // Preflight defines model for Preflight.
 type Preflight = control.Preflight
 
-// Queue defines model for Queue.
+// Queue Queue entries are not current-media evidence. Continuation uses Player.revision; any player revision change, including current-media changes, can cause stale_reference. Restart traversal from offset zero after stale_reference.
 type Queue = control.Queue
 
 // RequestedVolume defines model for RequestedVolume.
