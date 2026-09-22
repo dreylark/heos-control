@@ -55,7 +55,7 @@ func (q HistoryQuery) validate() error {
 		return ErrInvalid
 	}
 	switch q.Kind {
-	case "", "alarm", "playback", "volume", "mute", "transport", "stop", "cancel":
+	case "", "alarm", "playback", "volume", "mute", "transport", "skip", "stop", "cancel":
 	default:
 		return ErrInvalid
 	}

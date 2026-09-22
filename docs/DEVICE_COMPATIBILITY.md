@@ -53,7 +53,7 @@ subscription authorizes writes.
 | Identity and groups | Verify the configured player and detect grouping; grouped targets cannot be mutated |
 | Observation | Playback state, volume/mute, repeat/shuffle, current media and bounded queue reads |
 | Catalog | Configured local sources, bounded HEOS browsing and expiring opaque item references |
-| Direct controls | Play/Pause/Stop, volume, mute, repeat/shuffle and native queue replacement |
+| Direct controls | Play/Pause/Stop, next/previous, volume, mute, repeat/shuffle and native queue replacement |
 | Bounded playback | Confirmed local media selection, ramp/hold/fade and owned Stop |
 | Events | Registration, typed validated fields, continuity/gap handling and idle heartbeat |
 | Diagnostics | Read-only identity/connectivity probes and redacted completion evidence |
@@ -65,9 +65,13 @@ HEOS device can browse; the service does not implement its own DLNA player.
 
 Account sign-in, cloud-service setup, search, group creation/control, QuickSelect,
 firmware updates, arbitrary stream playback and general queue editing are not
-exposed. Handling Next/Previous notifications within an owned queue does not
-imply a dedicated API command for those actions. The exact supported HTTP
-surface is defined by [OpenAPI](../api/openapi.yaml) and [API usage](API_USAGE.md).
+exposed. Next and previous use `player/play_next` and `player/play_previous`
+(4.2.21, 4.2.22). Their success replies carry only the player id, so the service
+confirms a different current entry by bounded readback. Handling Next/Previous
+notifications inside an owned queue remains a separate observation path and does
+not itself perform that command. API skip is not in the recorded Home 150
+qualification set. The exact supported HTTP surface is defined by
+[OpenAPI](../api/openapi.yaml) and [API usage](API_USAGE.md).
 
 ## Observed Home 150 behavior
 

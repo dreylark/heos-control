@@ -177,7 +177,7 @@ func (s *Store) Admit(ctx context.Context, request Request, proposal Proposal) (
 		return Admission{}, ErrInvalid
 	}
 	switch proposal.Kind {
-	case "alarm", "playback", "volume", "mute", "transport", "stop", "cancel":
+	case "alarm", "playback", "volume", "mute", "transport", "skip", "stop", "cancel":
 	default:
 		return Admission{}, ErrInvalid
 	}

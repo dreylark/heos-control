@@ -45,6 +45,7 @@ type Command struct {
 	Level       int         `json:"level"`
 	Muted       bool        `json:"muted"`
 	State       string      `json:"state"`
+	Direction   string      `json:"direction,omitempty"`
 	Takeover    bool        `json:"takeover"`
 	ItemRef     string      `json:"item_ref"`
 	Shuffle     bool        `json:"shuffle"`
@@ -109,6 +110,7 @@ type execution struct {
 	scalar           *scalarConfirmation // protected by mu; pending scalar observation, distinct from command reply
 	queueWait        time.Time           // protected by mu; zero outside an active track transition
 	automating       bool                // protected by mu; only the bounded playback worker may wait for Next
+	keepExpectations bool                // protected by mu; skip retains transitional state events until readback
 	now              func() time.Time    // immutable operation clock
 	wake             chan struct{}       // immutable, coalesces observation hints from the existing callback
 	eventRevision    uint64              // protected by mu; relevant events only
@@ -170,6 +172,19 @@ func (c *Coordinator) emit(o journal.Operation) {
 func safety(l *lane, s heos.Snapshot) error {
 	return deviceSafety(l.device.Config, s)
 }
+
+func mutationSafety(l *lane, s heos.Snapshot, kind string) error {
+	if kind != "skip" || s.State != "unknown" {
+		return safety(l, s)
+	}
+	// A verified unknown playback state is a skip-domain rejection, while
+	// unavailable observations and device safety failures retain their errors.
+	if err := deviceObservationSafety(l.device.Config, s); err != nil {
+		return err
+	}
+	return ErrNotSkippable
+}
+
 func deviceSafety(p config.Player, s heos.Snapshot) error {
 	if err := deviceObservationSafety(p, s); err != nil {
 		return err
@@ -274,7 +289,8 @@ func (c *Coordinator) Submit(ctx context.Context, request journal.Request, cmd C
 	if e := c.ctx.Err(); e != nil {
 		return journal.Operation{}, e
 	}
-	if cmd.FadeSeconds < 0 || cmd.FadeSeconds > 60 || cmd.Level < 0 || cmd.Level > 100 {
+	if cmd.FadeSeconds < 0 || cmd.FadeSeconds > 60 || cmd.Level < 0 || cmd.Level > 100 ||
+		(cmd.Kind == "skip" && cmd.Direction != "next" && cmd.Direction != "previous") {
 		return journal.Operation{}, heos.ErrBounds
 	}
 	// Freeze caller-owned optional settings before admitting asynchronous work.
@@ -299,7 +315,7 @@ func (c *Coordinator) Submit(ctx context.Context, request journal.Request, cmd C
 	}
 	s := l.device.Observer.Snapshot()
 	if !priority {
-		if e := safety(l, s); e != nil {
+		if e := mutationSafety(l, s, cmd.Kind); e != nil {
 			return journal.Operation{}, e
 		}
 	}
@@ -389,7 +405,7 @@ func (c *Coordinator) Submit(ctx context.Context, request journal.Request, cmd C
 			}
 		}
 		fresh := l.device.Observer.Snapshot()
-		if e = safety(l, fresh); e != nil {
+		if e = mutationSafety(l, fresh, cmd.Kind); e != nil {
 			return journal.Operation{}, e
 		}
 		if cmd.Kind == "cancel" {
@@ -418,6 +434,17 @@ func (c *Coordinator) Submit(ctx context.Context, request journal.Request, cmd C
 		p, _ := c.reads.Player(request.Player)
 		if request.IfMatch != fmt.Sprintf("%q", p.Revision) {
 			return journal.Operation{}, ErrPrecondition
+		}
+	}
+	if cmd.Kind == "skip" {
+		readctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		s, e = completeQueue(readctx, l, s)
+		cancel()
+		if e != nil {
+			return journal.Operation{}, e
+		}
+		if e = skipAdmissible(l.device.Config.VolumeCeiling, s); e != nil {
+			return journal.Operation{}, e
 		}
 	}
 	ids := make([]string, 0, len(members))

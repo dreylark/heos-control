@@ -264,6 +264,8 @@ func writeError(w http.ResponseWriter, r *http.Request, err error) {
 		f = &apiFailure{409, "stale_reference", false}
 	case errors.Is(err, heos.ErrBounds):
 		f = &apiFailure{422, "out_of_bounds", false}
+	case errors.Is(err, control.ErrNotSkippable):
+		f = &apiFailure{422, "not_skippable", false}
 	case errors.Is(err, heos.ErrQueueFull), errors.Is(err, heos.ErrCatalogFull), errors.Is(err, errEventCapacity), errors.Is(err, journal.ErrCapacity):
 		f = &apiFailure{429, "capacity_exceeded", true}
 	}

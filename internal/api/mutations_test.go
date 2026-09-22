@@ -111,6 +111,11 @@ func TestMutationScopesValidationAndResponseContract(t *testing.T) {
 		code, calls              int
 	}{
 		{"control", "PUT", "/v1/players/room/volume", `{"unit":"heos","level":10,"takeover":false}`, []string{"control"}, 202, 1},
+		{"skip", "POST", "/v1/players/room/skip", `{"direction":"next","takeover":false}`, []string{"control"}, 202, 1},
+		{"skip requires control", "POST", "/v1/players/room/skip", `{"direction":"previous","takeover":false}`, []string{"read"}, 403, 0},
+		{"skip takeover", "POST", "/v1/players/room/skip", `{"direction":"next","takeover":true}`, []string{"control"}, 403, 0},
+		{"skip operator takeover", "POST", "/v1/players/room/skip", `{"direction":"previous","takeover":true}`, []string{"control", "operator"}, 202, 1},
+		{"skip direction", "POST", "/v1/players/room/skip", `{"direction":"play","takeover":false}`, []string{"control"}, 400, 0},
 		{"read cannot write", "PUT", "/v1/players/room/volume", `{"unit":"heos","level":10,"takeover":false}`, []string{"read"}, 403, 0},
 		{"takeover", "PUT", "/v1/players/room/mute", `{"muted":false,"takeover":true}`, []string{"control"}, 403, 0},
 		{"operator takeover", "PUT", "/v1/players/room/mute", `{"muted":false,"takeover":true}`, []string{"control", "operator"}, 202, 1},
@@ -152,6 +157,9 @@ func TestMutationScopesValidationAndResponseContract(t *testing.T) {
 			}
 			if tc.name == "bounded playback" && (submit.cmd.Automation == nil || submit.cmd.Automation.TargetLevel != 40 || submit.cmd.Automation.DurationSeconds != 1200 || submit.cmd.Automation.RampSeconds != 300 || submit.cmd.Automation.FadeSeconds != 30) {
 				t.Fatal("lost automation settings", submit.cmd)
+			}
+			if tc.name == "skip" && (submit.cmd.Kind != "skip" || submit.cmd.Direction != "next" || submit.cmd.Takeover) {
+				t.Fatal(submit.cmd)
 			}
 		})
 	}
