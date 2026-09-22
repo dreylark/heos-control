@@ -114,10 +114,10 @@ func (r *execution) acceptExpectedEvent(e heos.Event) bool {
 			// Home 150 reports media both while loading and starting a new
 			// queue (Denon 5.5). Fresh readback closes this window;
 			// queue membership/current media must still be confirmed.
-			if data.Kind != heos.EventNowPlaying {
+			if data.Kind != heos.EventNowPlaying && !r.keepExpectations {
 				r.events[e.Command] = append(list[:i], list[i+1:]...)
 			}
-			if data.Kind == heos.EventState && data.State == "play" {
+			if data.Kind == heos.EventState && data.State == "play" && !r.keepExpectations {
 				// Once playback starts, even a stop during queue readback
 				// is intervention, not the preceding loading state.
 				r.events[e.Command] = nil
@@ -145,6 +145,7 @@ func confirmedVolumeEvent(e heos.Event, expected heos.Snapshot) bool {
 func (r *execution) expect(m heos.Mutation) {
 	r.queueStart = queueNotStarting
 	r.scalar = nil
+	r.keepExpectations = false
 	if scalarMutation(m) {
 		r.scalar = newScalarConfirmation(m, r.expected)
 	}
@@ -178,6 +179,15 @@ func (r *execution) expect(m heos.Mutation) {
 		// Home 150 also refreshes now-playing metadata during transport.
 		// This notification has no MID (Denon 5.5); readback verifies it.
 		add("event/player_now_playing_changed", map[string]string{})
+	case "skip":
+		// Play next/previous can report stop or unknown before the new entry
+		// (Denon 5.4/5.5). Keep every transitional state: duplicates and either
+		// order must not look like a second controller. Readback still decides.
+		r.keepExpectations = true
+		add("event/player_now_playing_changed", map[string]string{})
+		for _, state := range []string{"stop", "unknown", "play", "pause"} {
+			add("event/player_state_changed", map[string]string{"state": state})
+		}
 	case "mode":
 		add("event/repeat_mode_changed", map[string]string{"repeat": m.Repeat})
 		shuffle := "off"

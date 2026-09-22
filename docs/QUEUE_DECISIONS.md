@@ -100,7 +100,9 @@ State events report state, not who initiated a transition (5.4); a now-playing
 notification does not report queue membership (5.5). Natural advancement and
 manual Next/Previous therefore follow the same unchanged-queue policy. Manual
 Stop followed by Play inside the wait window may also preserve the run. API Stop
-and Pause cancel immediately.
+and Pause cancel immediately. `POST /skip` is not an event in this table: it is
+a new operation that is refused while a run is active unless takeover releases
+that run first.
 
 ## Active observation rules
 

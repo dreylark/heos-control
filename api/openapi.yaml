@@ -12,7 +12,7 @@ info:
     ## Authentication
     Enter your machine token under **Authentication → Bearer Token**. Requests use
     `Authorization: Bearer <token>`. Scopes are additive: `read` allows
-    observation and preflight, `control` allows direct volume/mute/transport,
+    observation and preflight, `control` allows direct volume/mute/transport/skip,
     and `operator` allows playback and operator stop. Every request also needs
     a grant for its player; `operator` does not imply `read` or `control`.
     Health probes are public. Device writes require configured per-player opt-in,
@@ -536,8 +536,8 @@ paths:
         description: Exact operation kind; alarm is readable legacy data, not a mutation endpoint.
         schema:
           type: string
-          enum: [alarm, playback, volume, mute, transport, stop, cancel]
-          x-enum-varnames: [HistoryAlarm, HistoryPlayback, HistoryVolume, HistoryMute, HistoryTransport, HistoryStop, HistoryCancel]
+          enum: [alarm, playback, volume, mute, transport, skip, stop, cancel]
+          x-enum-varnames: [HistoryAlarm, HistoryPlayback, HistoryVolume, HistoryMute, HistoryTransport, HistorySkip, HistoryStop, HistoryCancel]
       - name: delivery
         in: query
         description: Exact outcome.delivery; records without delivery do not match this filter.
@@ -901,6 +901,71 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/TransportInput'
+      responses:
+        '202':
+          description: Durably admitted operation or current idempotent replay; acceptance
+            is not device confirmation.
+          headers:
+            Location:
+              required: true
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Operation'
+        default:
+          description: Request error. Inspect the same idempotency key after an uncertain
+            commit.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /v1/players/{player}/skip:
+    post:
+      operationId: skipPlayer
+      tags: [Playback]
+      summary: Skip to the next or previous queue entry
+      description: >
+        Requires control scope. Takeover additionally requires operator scope.
+        Sends one native next or previous command for the current queue entry.
+        Admission requires Play or Pause, a verified volume at or below the player
+        ceiling, and an exact current entry in the complete queue. Confirmation
+        requires a different entry in that same queue and settled play or pause
+        within twelve seconds. The native success reply does not identify the new
+        entry. Transitional stop/unknown or mixed MID/QID from the same queue
+        permits only waiting; newer events must be reconciled before confirmation.
+        Repeated hints do not extend the deadline. A command that does not produce
+        a confirmed entry is not replayed.
+        While another operation owns the player, takeover false returns 409;
+        takeover releases that run, including its stop timer, and then skips.
+        Observed manual or natural navigation during an owned run is unchanged
+        and is not this command.
+      parameters:
+      - *id001
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 256
+          pattern: ^[A-Za-z0-9._:-]+$
+      - name: If-Match
+        in: header
+        required: false
+        description: Required for a new request (428 if absent); replay precedes freshness
+          checks.
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 256
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SkipInput'
       responses:
         '202':
           description: Durably admitted operation or current idempotent replay; acceptance
@@ -1564,7 +1629,7 @@ components:
           minimum: 0
           maximum: 100
     PlaybackAutomation:
-      description: Optional bounded playback. Requires repeat off, initial <= target <= player ceiling, and ramp <= duration - fade with fade < duration. With takeover false, playing targets return 409; paused or stopped targets may start unless another operation owns the device. Natural transitions and manual Next/Previous within the complete unchanged queue preserve the original ramp, fade and stop deadline. Pause, volume, mute, mode, source, group or queue changes release ownership and remove the timer. During an active run, Stop or transient unknown suspends writes for up to twelve seconds, capped by the original stop deadline; fresh Play must confirm the unchanged queue, valid MID/QID and other controls before resuming. Repeated Stop does not extend the wait; persistent Stop releases without cleanup. Manual Stop then Play in this window may preserve the run, as HEOS cannot distinguish it from Next. Operator /stop cancels immediately.
+      description: Optional bounded playback. Requires repeat off, initial <= target <= player ceiling, and ramp <= duration - fade with fade < duration. With takeover false, playing targets return 409; paused or stopped targets may start unless another operation owns the device. Natural transitions and manual Next/Previous within the complete unchanged queue preserve the original ramp, fade and stop deadline. POST /skip is not that path; without takeover it returns 409 while an operation owns the player, and takeover releases the run, including its stop timer, before navigating. Pause, volume, mute, mode, source, group or queue changes release ownership and remove the timer. During an active run, Stop or transient unknown suspends writes for up to twelve seconds, capped by the original stop deadline; fresh Play must confirm the unchanged queue, valid MID/QID and other controls before resuming. Repeated Stop does not extend the wait; persistent Stop releases without cleanup. Manual Stop then Play in this window may preserve the run, as HEOS cannot distinguish it from Next. Operator /stop cancels immediately.
       type: object
       additionalProperties: false
       required:
@@ -1673,6 +1738,20 @@ components:
           - play
           - pause
           - stop
+        takeover:
+          type: boolean
+    SkipInput:
+      type: object
+      additionalProperties: false
+      required:
+      - direction
+      - takeover
+      properties:
+        direction:
+          type: string
+          enum:
+          - next
+          - previous
         takeover:
           type: boolean
     StopInput:

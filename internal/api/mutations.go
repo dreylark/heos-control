@@ -70,6 +70,13 @@ func (s *Server) SetTransport(ctx context.Context, r SetTransportRequestObject) 
 	}
 	return SetTransport202JSONResponse{Body: op, Headers: SetTransport202ResponseHeaders{Location: "/v1/operations/" + op.ID}}, nil
 }
+func (s *Server) SkipPlayer(ctx context.Context, r SkipPlayerRequestObject) (SkipPlayerResponseObject, error) {
+	op, e := s.submit(ctx, r.Player, r.Params.IdempotencyKey, value(r.Params.IfMatch, ""), r.Body, control.Command{Kind: "skip", Direction: string(r.Body.Direction), Takeover: r.Body.Takeover})
+	if e != nil {
+		return nil, e
+	}
+	return SkipPlayer202JSONResponse{Body: op, Headers: SkipPlayer202ResponseHeaders{Location: "/v1/operations/" + op.ID}}, nil
+}
 func (s *Server) StopPlayer(ctx context.Context, r StopPlayerRequestObject) (StopPlayerResponseObject, error) {
 	op, e := s.submit(ctx, r.Player, r.Params.IdempotencyKey, "", r.Body, control.Command{Kind: "stop", FadeSeconds: r.Body.FadeSeconds})
 	if e != nil {

@@ -178,6 +178,24 @@ func (e RequestedVolumeUnit) Valid() bool {
 	}
 }
 
+// Defines values for SkipInputDirection.
+const (
+	Next     SkipInputDirection = "next"
+	Previous SkipInputDirection = "previous"
+)
+
+// Valid indicates whether the value is a known member of the SkipInputDirection enum.
+func (e SkipInputDirection) Valid() bool {
+	switch e {
+	case Next:
+		return true
+	case Previous:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for TransportInputState.
 const (
 	Pause TransportInputState = "pause"
@@ -301,6 +319,7 @@ const (
 	HistoryCancel    ListOperationsParamsKind = "cancel"
 	HistoryMute      ListOperationsParamsKind = "mute"
 	HistoryPlayback  ListOperationsParamsKind = "playback"
+	HistorySkip      ListOperationsParamsKind = "skip"
 	HistoryStop      ListOperationsParamsKind = "stop"
 	HistoryTransport ListOperationsParamsKind = "transport"
 	HistoryVolume    ListOperationsParamsKind = "volume"
@@ -316,6 +335,8 @@ func (e ListOperationsParamsKind) Valid() bool {
 	case HistoryMute:
 		return true
 	case HistoryPlayback:
+		return true
+	case HistorySkip:
 		return true
 	case HistoryStop:
 		return true
@@ -450,7 +471,7 @@ type OperationPage struct {
 	NextCursor *string     `json:"next_cursor"`
 }
 
-// PlaybackAutomation Optional bounded playback. Requires repeat off, initial <= target <= player ceiling, and ramp <= duration - fade with fade < duration. With takeover false, playing targets return 409; paused or stopped targets may start unless another operation owns the device. Natural transitions and manual Next/Previous within the complete unchanged queue preserve the original ramp, fade and stop deadline. Pause, volume, mute, mode, source, group or queue changes release ownership and remove the timer. During an active run, Stop or transient unknown suspends writes for up to twelve seconds, capped by the original stop deadline; fresh Play must confirm the unchanged queue, valid MID/QID and other controls before resuming. Repeated Stop does not extend the wait; persistent Stop releases without cleanup. Manual Stop then Play in this window may preserve the run, as HEOS cannot distinguish it from Next. Operator /stop cancels immediately.
+// PlaybackAutomation Optional bounded playback. Requires repeat off, initial <= target <= player ceiling, and ramp <= duration - fade with fade < duration. With takeover false, playing targets return 409; paused or stopped targets may start unless another operation owns the device. Natural transitions and manual Next/Previous within the complete unchanged queue preserve the original ramp, fade and stop deadline. POST /skip is not that path; without takeover it returns 409 while an operation owns the player, and takeover releases the run, including its stop timer, before navigating. Pause, volume, mute, mode, source, group or queue changes release ownership and remove the timer. During an active run, Stop or transient unknown suspends writes for up to twelve seconds, capped by the original stop deadline; fresh Play must confirm the unchanged queue, valid MID/QID and other controls before resuming. Repeated Stop does not extend the wait; persistent Stop releases without cleanup. Manual Stop then Play in this window may preserve the run, as HEOS cannot distinguish it from Next. Operator /stop cancels immediately.
 type PlaybackAutomation struct {
 	DurationSeconds int             `json:"duration_seconds"`
 	FadeSeconds     int             `json:"fade_seconds"`
@@ -462,7 +483,7 @@ type PlaybackAutomation struct {
 //
 // Examples: {"automation":{"duration_seconds":60,"fade_seconds":5,"ramp_seconds":10,"target_volume":{"level":3,"unit":"heos"}},"initial_volume":{"level":2,"unit":"heos"},"item_ref":"replace-with-current-item-ref","queue_mode":"replace","repeat":"off","shuffle":false,"takeover":false}
 type PlaybackInput struct {
-	// Automation Optional bounded playback. Requires repeat off, initial <= target <= player ceiling, and ramp <= duration - fade with fade < duration. With takeover false, playing targets return 409; paused or stopped targets may start unless another operation owns the device. Natural transitions and manual Next/Previous within the complete unchanged queue preserve the original ramp, fade and stop deadline. Pause, volume, mute, mode, source, group or queue changes release ownership and remove the timer. During an active run, Stop or transient unknown suspends writes for up to twelve seconds, capped by the original stop deadline; fresh Play must confirm the unchanged queue, valid MID/QID and other controls before resuming. Repeated Stop does not extend the wait; persistent Stop releases without cleanup. Manual Stop then Play in this window may preserve the run, as HEOS cannot distinguish it from Next. Operator /stop cancels immediately.
+	// Automation Optional bounded playback. Requires repeat off, initial <= target <= player ceiling, and ramp <= duration - fade with fade < duration. With takeover false, playing targets return 409; paused or stopped targets may start unless another operation owns the device. Natural transitions and manual Next/Previous within the complete unchanged queue preserve the original ramp, fade and stop deadline. POST /skip is not that path; without takeover it returns 409 while an operation owns the player, and takeover releases the run, including its stop timer, before navigating. Pause, volume, mute, mode, source, group or queue changes release ownership and remove the timer. During an active run, Stop or transient unknown suspends writes for up to twelve seconds, capped by the original stop deadline; fresh Play must confirm the unchanged queue, valid MID/QID and other controls before resuming. Repeated Stop does not extend the wait; persistent Stop releases without cleanup. Manual Stop then Play in this window may preserve the run, as HEOS cannot distinguish it from Next. Operator /stop cancels immediately.
 	Automation    *PlaybackAutomation    `json:"automation,omitempty"`
 	InitialVolume RequestedVolume        `json:"initial_volume"`
 	ItemRef       string                 `json:"item_ref"`
@@ -505,6 +526,15 @@ type RequestedVolume struct {
 
 // RequestedVolumeUnit defines model for RequestedVolume.Unit.
 type RequestedVolumeUnit string
+
+// SkipInput defines model for SkipInput.
+type SkipInput struct {
+	Direction SkipInputDirection `json:"direction"`
+	Takeover  bool               `json:"takeover"`
+}
+
+// SkipInputDirection defines model for SkipInput.Direction.
+type SkipInputDirection string
 
 // Source defines model for Source.
 type Source = control.Source
@@ -606,6 +636,14 @@ type GetQueueParams struct {
 	Revision *string `form:"revision,omitempty" json:"revision,omitempty"`
 }
 
+// SkipPlayerParams defines parameters for SkipPlayer.
+type SkipPlayerParams struct {
+	IdempotencyKey string `json:"Idempotency-Key"`
+
+	// IfMatch Required for a new request (428 if absent); replay precedes freshness checks.
+	IfMatch *string `json:"If-Match,omitempty"`
+}
+
 // StopPlayerParams defines parameters for StopPlayer.
 type StopPlayerParams struct {
 	IdempotencyKey string `json:"Idempotency-Key"`
@@ -645,6 +683,9 @@ type PlaybackJSONRequestBody = PlaybackInput
 
 // PreflightJSONRequestBody defines body for Preflight for application/json ContentType.
 type PreflightJSONRequestBody = PlaybackInput
+
+// SkipPlayerJSONRequestBody defines body for SkipPlayer for application/json ContentType.
+type SkipPlayerJSONRequestBody = SkipInput
 
 // StopPlayerJSONRequestBody defines body for StopPlayer for application/json ContentType.
 type StopPlayerJSONRequestBody = StopInput
@@ -699,6 +740,9 @@ type ServerInterface interface {
 	// GetQueue Read a queue page
 	// (GET /v1/players/{player}/queue)
 	GetQueue(w http.ResponseWriter, r *http.Request, player string, params GetQueueParams)
+	// SkipPlayer Skip to the next or previous queue entry
+	// (POST /v1/players/{player}/skip)
+	SkipPlayer(w http.ResponseWriter, r *http.Request, player string, params SkipPlayerParams)
 	// StopPlayer Stop playback as operator
 	// (POST /v1/players/{player}/stop)
 	StopPlayer(w http.ResponseWriter, r *http.Request, player string, params StopPlayerParams)
@@ -1306,6 +1350,79 @@ func (siw *ServerInterfaceWrapper) GetQueue(w http.ResponseWriter, r *http.Reque
 	handler.ServeHTTP(w, r)
 }
 
+// SkipPlayer operation middleware
+func (siw *ServerInterfaceWrapper) SkipPlayer(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "player" -------------
+	var player string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "player", r.PathValue("player"), &player, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "player", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params SkipPlayerParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey string
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	// ------------- Optional header parameter "If-Match" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("If-Match")]; found {
+		var IfMatch string
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "If-Match", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "If-Match", valueList[0], &IfMatch, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "If-Match", Err: err})
+			return
+		}
+
+		params.IfMatch = &IfMatch
+
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SkipPlayer(w, r, player, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // StopPlayer operation middleware
 func (siw *ServerInterfaceWrapper) StopPlayer(w http.ResponseWriter, r *http.Request) {
 
@@ -1725,6 +1842,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/v1/players/{player}/volume", wrapper.SetVolume)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/v1/players/{player}/mute", wrapper.SetMute)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/v1/players/{player}/transport", wrapper.SetTransport)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/players/{player}/skip", wrapper.SkipPlayer)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/players/{player}/stop", wrapper.StopPlayer)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/operations/{operation}/cancel", wrapper.CancelOperation)
 
@@ -2611,6 +2729,55 @@ func (response GetQueuedefaultJSONResponse) VisitGetQueueResponse(w http.Respons
 	return err
 }
 
+type SkipPlayerRequestObject struct {
+	Player string `json:"player"`
+	Params SkipPlayerParams
+	Body   *SkipPlayerJSONRequestBody
+}
+
+type SkipPlayerResponseObject interface {
+	VisitSkipPlayerResponse(w http.ResponseWriter) error
+}
+
+type SkipPlayer202ResponseHeaders struct {
+	Location string
+}
+
+type SkipPlayer202JSONResponse struct {
+	Body    Operation
+	Headers SkipPlayer202ResponseHeaders
+}
+
+func (response SkipPlayer202JSONResponse) VisitSkipPlayerResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Location", fmt.Sprint(response.Headers.Location))
+	w.WriteHeader(202)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SkipPlayerdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response SkipPlayerdefaultJSONResponse) VisitSkipPlayerResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type StopPlayerRequestObject struct {
 	Player string `json:"player"`
 	Params StopPlayerParams
@@ -2940,6 +3107,9 @@ type StrictServerInterface interface {
 	// GetQueue Read a queue page
 	// (GET /v1/players/{player}/queue)
 	GetQueue(ctx context.Context, request GetQueueRequestObject) (GetQueueResponseObject, error)
+	// SkipPlayer Skip to the next or previous queue entry
+	// (POST /v1/players/{player}/skip)
+	SkipPlayer(ctx context.Context, request SkipPlayerRequestObject) (SkipPlayerResponseObject, error)
 	// StopPlayer Stop playback as operator
 	// (POST /v1/players/{player}/stop)
 	StopPlayer(ctx context.Context, request StopPlayerRequestObject) (StopPlayerResponseObject, error)
@@ -3375,6 +3545,40 @@ func (sh *strictHandler) GetQueue(w http.ResponseWriter, r *http.Request, player
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(GetQueueResponseObject); ok {
 		if err := validResponse.VisitGetQueueResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// SkipPlayer operation middleware
+func (sh *strictHandler) SkipPlayer(w http.ResponseWriter, r *http.Request, player string, params SkipPlayerParams) {
+	var request SkipPlayerRequestObject
+
+	request.Player = player
+	request.Params = params
+
+	var body SkipPlayerJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.SkipPlayer(ctx, request.(SkipPlayerRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "SkipPlayer")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(SkipPlayerResponseObject); ok {
+		if err := validResponse.VisitSkipPlayerResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

@@ -198,6 +198,7 @@ outcomes before starting another run.
 | `PUT /v1/players/{player}/volume` | `control` | `unit: heos`, `level`, `takeover` |
 | `PUT /v1/players/{player}/mute` | `control` | `muted`, `takeover` |
 | `PUT /v1/players/{player}/transport` | `control` | `state: play/pause/stop`, `takeover` |
+| `POST /v1/players/{player}/skip` | `control` | `direction: next/previous`, `takeover` |
 | `POST /v1/players/{player}/stop` | `operator` | `fade_seconds: 0..60` |
 | `POST /v1/operations/{operation}/cancel` | `control` | `mode: release/stop_owned`, optional `fade_seconds` |
 
@@ -212,8 +213,26 @@ playback. Operator `/stop` is an independent priority command and may interrupt
 another operation. It still requires a reachable device, database and valid
 admission evidence; it is not an emergency hardware-off mechanism.
 
-The API does not expose arbitrary HEOS commands, media URLs or next/previous
-buttons. Native-app navigation is handled as an observed transition.
+The API does not expose arbitrary HEOS commands or media URLs. `POST /skip`
+navigates the current queue by one native next or previous command (HEOS CLI
+Protocol Specification 1.17, 4.2.21 and 4.2.22). It is admitted only while the
+player is playing or paused, the volume is at or below the configured ceiling,
+and the current entry is an exact member of the complete queue. Acceptance does
+not mean the entry changed: confirmation requires a different entry in that same
+queue and settled play or pause within twelve seconds. The native success reply
+identifies only the player. An acknowledged command that never shows a new entry
+is not replayed; retry the original idempotency key to read that outcome.
+Transitional Stop/unknown or a mixed MID/QID pair from that queue permits only
+waiting. Confirmation needs an exact pair and reconciliation of newer events;
+repeated notifications do not extend the twelve-second deadline.
+
+Skip follows the other direct controls. While an operation owns the player,
+`takeover: false` returns 409. `takeover: true` requires operator scope, releases
+that run, including its stop timer, and then skips. Observed manual or natural
+Next/Previous during an owned run still preserves the ramp, fade and stop
+deadline; that observation is not this command. Shuffle can make the confirmed
+entry non-adjacent. End of queue, repeat-one and an unchanged entry are not
+reported as a confirmed skip.
 
 ## Retries and errors
 

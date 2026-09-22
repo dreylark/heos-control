@@ -107,6 +107,16 @@ func (f *journalFixture) counts(operations, records, reservations int) {
 	}
 }
 
+func TestSkipKindAdmission(t *testing.T) {
+	f := newJournalFixture(t)
+	r, p := f.request("skip-kind", "physical-1")
+	p.Kind = "skip"
+	a, err := f.store.Admit(f.ctx, r, p)
+	if err != nil || !a.Created || a.Operation.Kind != "skip" {
+		t.Fatal(err, a)
+	}
+}
+
 func TestJournalAdmission(t *testing.T) {
 	t.Run("same key concurrently creates one operation", func(t *testing.T) {
 		f := newJournalFixture(t)

@@ -40,12 +40,16 @@ func (c *Coordinator) confirmReadback(l *lane, r *execution, m heos.Mutation, be
 		}
 		after, err := c.observeRun(ctx, l, r, reuse)
 		reuse = true
+		if err == nil && m.Kind == "skip" {
+			after, err = completeQueue(ctx, l, after)
+		}
 		if !c.clock.Now().Before(deadline) {
 			return after, context.DeadlineExceeded
 		}
 		if err == nil {
 			c.traceSnapshot(r, "pending_readback", after)
-			if m.Kind == "queue" {
+			switch m.Kind {
+			case "queue":
 				d := c.queueStartObservation(ctx, l, r, before, after, deadline)
 				if c.logger != nil && d.Rule != lastQueueRule {
 					c.logger.Debug("queue start confirmation decision", "operation_id", r.id, "action", d.Action, "rule", d.Rule, "timeout_at", deadline)
@@ -57,7 +61,14 @@ func (c *Coordinator) confirmReadback(l *lane, r *execution, m heos.Mutation, be
 				case queueStartAbort:
 					return after, d.Err
 				}
-			} else {
+			case "skip":
+				if err = deviceObservationSafety(l.device.Config, after); err != nil {
+					return after, err
+				}
+				if confirmed, err := r.acceptSkipReadback(ctx, before, after); confirmed || err != nil {
+					return after, err
+				}
+			default:
 				if err = deviceObservationSafety(l.device.Config, after); err != nil {
 					return after, err
 				}
@@ -148,6 +159,15 @@ func pendingChanges(before, after heos.Snapshot, m heos.Mutation) []string {
 			before.State = after.State
 		}
 		before = transportMediaReadback(before, after, m.State, true)
+	case "skip":
+		if after.State == "play" || after.State == "pause" || after.State == "stop" || after.State == "unknown" {
+			before.State = after.State
+		}
+		// MID and QID can settle separately. Only identifiers from this same
+		// queue permit waiting; skipConfirmed still requires an exact pair.
+		if emptyMedia(after.Media) || queuedMedia(before.Queue, after.Media) || transitionalQueueMedia(before.Queue, after.Media) {
+			before.Media = after.Media
+		}
 	}
 	return stateChanges(before, after)
 }

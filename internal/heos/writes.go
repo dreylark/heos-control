@@ -12,14 +12,15 @@ import (
 // are checked by the coordinator; the owner rechecks the observation token
 // immediately before any bytes are sent. There is no automatic write replay.
 type Mutation struct {
-	Kind    string
-	Player  ID
-	Level   int
-	Muted   bool
-	State   string
-	Repeat  string
-	Shuffle bool
-	Item    Item
+	Kind      string
+	Player    ID
+	Level     int
+	Muted     bool
+	State     string
+	Direction string
+	Repeat    string
+	Shuffle   bool
+	Item      Item
 }
 
 func (m Mutation) command() (string, url.Values, error) {
@@ -47,6 +48,17 @@ func (m Mutation) command() (string, url.Values, error) {
 		}
 		a.Set("state", m.State)
 		return "player/set_play_state", a, nil
+	case "skip":
+		// HEOS CLI Protocol Specification 1.17, 4.2.21 and 4.2.22. The success
+		// reply carries pid only and does not identify the resulting queue entry.
+		switch m.Direction {
+		case "next":
+			return "player/play_next", a, nil
+		case "previous":
+			return "player/play_previous", a, nil
+		default:
+			return "", nil, ErrBounds
+		}
 	case "mode":
 		if m.Repeat != "off" && m.Repeat != "on_all" && m.Repeat != "on_one" {
 			return "", nil, ErrBounds

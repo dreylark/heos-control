@@ -141,7 +141,7 @@ func TestDoctorSchemaFailures(t *testing.T) {
 		{"missing metadata column", `ALTER TABLE heos.schema_migrations RENAME COLUMN min_runtime TO missing_runtime`, "schema_check_failed"},
 		{"checksum", `UPDATE heos.schema_migrations SET checksum=repeat('0',64)`, "schema_incompatible"},
 		{"missing migration", `DELETE FROM heos.schema_migrations`, "schema_incompatible"},
-		{"future incompatible", `INSERT INTO heos.schema_migrations(version,checksum,min_runtime) VALUES(2,repeat('0',64),2)`, "schema_incompatible"},
+		{"future incompatible", `INSERT INTO heos.schema_migrations(version,checksum,min_runtime) VALUES(3,repeat('0',64),3)`, "schema_incompatible"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			f := newJournalFixture(t)
@@ -153,7 +153,7 @@ func TestDoctorSchemaFailures(t *testing.T) {
 	}
 	t.Run("compatible future migration", func(t *testing.T) {
 		f := newJournalFixture(t)
-		f.exec(`INSERT INTO heos.schema_migrations(version,checksum,min_runtime) VALUES(2,repeat('0',64),1)`)
+		f.exec(`INSERT INTO heos.schema_migrations(version,checksum,min_runtime) VALUES(3,repeat('0',64),1)`)
 		for _, check := range Diagnose(f.ctx, f.runtime) {
 			if !check.OK {
 				t.Fatalf("runtime-compatible schema rejected: %+v", check)

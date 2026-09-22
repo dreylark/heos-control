@@ -80,8 +80,14 @@ func (c *Coordinator) writeOnce(l *lane, r *execution, m heos.Mutation) (err err
 	if r.automating && m.Kind == "volume" && m.Level > 0 && !c.clock.Now().Before(r.playbackDeadline) {
 		return errPlaybackTimelineChanged
 	}
-	if e := safety(l, fresh); e != nil {
+	if e := mutationSafety(l, fresh, m.Kind); e != nil {
 		return e
+	}
+	if m.Kind == "skip" {
+		before, fresh, e = c.prepareSkip(r.ctx, l, before, fresh)
+		if e != nil {
+			return e
+		}
 	}
 	c.traceSnapshot(r, "before_write", fresh)
 	r.mu.Lock()
@@ -161,6 +167,12 @@ func (c *Coordinator) writeOnce(l *lane, r *execution, m heos.Mutation) (err err
 	case "transport":
 		expected.State = m.State
 		expected = transportMediaReadback(expected, after, m.State, false)
+	case "skip":
+		if !skipConfirmed(fresh, after) {
+			return ownershipMismatch("readback_changed", stateChanges(fresh, after), fresh, after)
+		}
+		expected.State = after.State
+		expected.Media = after.Media
 	case "queue":
 		expected.State = "play"
 		expected.Media = after.Media
@@ -199,6 +211,7 @@ func (c *Coordinator) writeOnce(l *lane, r *execution, m heos.Mutation) (err err
 	r.events = map[string][]map[string]string{}
 	r.queueStart = queueNotStarting
 	r.scalar = nil
+	r.keepExpectations = false
 	r.mu.Unlock()
 	return context.Cause(r.ctx)
 }
@@ -219,6 +232,8 @@ func (c *Coordinator) execute(l *lane, r *execution, cmd Command, item heos.Item
 		e = write(heos.Mutation{Kind: "mute", Muted: cmd.Muted})
 	case "transport":
 		e = write(heos.Mutation{Kind: "transport", State: cmd.State})
+	case "skip":
+		e = write(heos.Mutation{Kind: "skip", Direction: cmd.Direction})
 	case "playback":
 		e = c.startPlayback(l, r, cmd, item)
 		if e == nil && cmd.Automation != nil {
@@ -280,6 +295,9 @@ func (c *Coordinator) execute(l *lane, r *execution, cmd Command, item heos.Item
 		}
 		if errors.Is(e, heos.ErrRejected) {
 			code, outcome = "device_rejected", "rejected"
+		}
+		if errors.Is(e, ErrNotSkippable) {
+			code = "not_skippable"
 		}
 		if errors.Is(e, errJournalUnavailable) && c.ctx.Err() == nil {
 			code = "journal_unavailable"

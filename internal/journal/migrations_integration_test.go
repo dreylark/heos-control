@@ -139,26 +139,26 @@ func TestGooseMigrationTransactionsAndPreviousRuntime(t *testing.T) {
 	if err := migrate(f.ctx, d, files); err == nil {
 		t.Fatal("migration with division by zero succeeded")
 	}
-	checkMigrationVersions(t, f, []int{1, 2})
+	checkMigrationVersions(t, f, []int{1, 2, 3})
 	var tableMissing bool
 	if err := f.owner.QueryRow(f.ctx, "SELECT to_regclass('heos.future_history') IS NULL").Scan(&tableMissing); err != nil || !tableMissing {
 		t.Fatalf("failed migration left a partial table: missing=%v, %v", tableMissing, err)
 	}
 	partial := migrationLedger(t, f)
-	if !reflect.DeepEqual(partial[:1], baseline) {
+	if !reflect.DeepEqual(partial[:len(baseline)], baseline) {
 		t.Fatal("applying a later migration rewrote the initial ledger")
 	}
 	checkPreviousRuntimeWrites(t, f, "intermediate")
 
-	// Correct only the failed, unapplied migration. Migration 2 is already
-	// committed and must not run again while resuming this failed release.
-	files["00003_test.sql"].Data = []byte(additiveMigration("CREATE TABLE heos.future_history(id bigint PRIMARY KEY);"))
+	// Correct only the failed, unapplied migration. The preceding additive file
+	// is already committed and must not run again while resuming this failed release.
+	files["00004_test.sql"].Data = []byte(additiveMigration("CREATE TABLE heos.future_history(id bigint PRIMARY KEY);"))
 	if err := migrate(f.ctx, d, files); err != nil {
 		t.Fatalf("retry after repairing unapplied migration: %v", err)
 	}
-	checkMigrationVersions(t, f, []int{1, 2, 3, 4})
+	checkMigrationVersions(t, f, []int{1, 2, 3, 4, 5})
 	complete := migrationLedger(t, f)
-	if !reflect.DeepEqual(complete[:2], partial) {
+	if !reflect.DeepEqual(complete[:len(partial)], partial) {
 		t.Fatal("retry rewrote previously committed migration metadata")
 	}
 	checkPreviousRuntimeWrites(t, f, "complete")
@@ -178,13 +178,13 @@ func TestGooseMigrationTransactionsAndPreviousRuntime(t *testing.T) {
 func TestGooseMigrationCompatibilityFloor(t *testing.T) {
 	f := newJournalFixture(t)
 	d := loadIntegrationConfig(t, "HEOS_TEST_OWNER_CONFIG").Database
-	files := migrationFiles(t, "-- +goose Up\n-- heos:min-runtime=2\nALTER TABLE heos.operations ADD COLUMN replacement_note text;\n")
+	files := migrationFiles(t, "-- +goose Up\n-- heos:min-runtime=3\nALTER TABLE heos.operations ADD COLUMN replacement_note text;\n")
 	if err := migrate(f.ctx, d, files); err != nil {
 		t.Fatal(err)
 	}
-	checkMigrationVersions(t, f, []int{1, 2})
+	checkMigrationVersions(t, f, []int{1, 2, 3})
 	if err := f.store.Ready(f.ctx); err == nil {
-		t.Fatal("previous runtime accepted a schema requiring runtime 2")
+		t.Fatal("previous runtime accepted a schema requiring a newer runtime")
 	}
 	r, p := f.request("incompatible", "speaker")
 	if _, err := f.store.Admit(f.ctx, r, p); err == nil {
@@ -202,7 +202,7 @@ func TestGooseMigrationRejectsInconsistentLedgers(t *testing.T) {
 		{"changed known checksum", "UPDATE heos.schema_migrations SET checksum = repeat('0', 64) WHERE version = 1", true},
 		{"missing known compatibility row", "DELETE FROM heos.schema_migrations WHERE version = 1", true},
 		{"missing known goose row", "DELETE FROM heos.goose_db_version WHERE version_id = 1", false},
-		{"extra goose row", "INSERT INTO heos.goose_db_version(version_id, is_applied) VALUES (2, true)", false},
+		{"extra goose row", "INSERT INTO heos.goose_db_version(version_id, is_applied) VALUES (3, true)", false},
 		{"goose down state", "UPDATE heos.goose_db_version SET is_applied = false WHERE version_id = 1", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -245,7 +245,7 @@ func TestGooseMigrationRejectsInconsistentLedgers(t *testing.T) {
 		if err := migrate(f.ctx, d, files); err != nil {
 			t.Fatal(err)
 		}
-		files["00002_test.sql"].Data = []byte(additiveMigration("SELECT 2;"))
+		files["00003_test.sql"].Data = []byte(additiveMigration("SELECT 2;"))
 		if err := migrate(f.ctx, d, files); err == nil {
 			t.Fatal("migrator accepted changed source for an applied migration")
 		}
@@ -338,7 +338,7 @@ func TestGooseMigrationLockCancellation(t *testing.T) {
 	if err := <-firstDone; err != nil {
 		t.Fatalf("first migrator failed after table lock released: %v", err)
 	}
-	checkMigrationVersions(t, f, []int{1, 2})
+	checkMigrationVersions(t, f, []int{1, 2, 3})
 	if err := migrate(f.ctx, d, files); err != nil {
 		t.Fatalf("cancelled contender leaked migration lock: %v", err)
 	}
@@ -367,7 +367,7 @@ func TestGooseMigrationStatementLockTimeout(t *testing.T) {
 	if err := tx.Rollback(f.ctx); err != nil {
 		t.Fatal(err)
 	}
-	checkMigrationVersions(t, f, []int{1})
+	checkMigrationVersions(t, f, []int{1, 2})
 	if err := f.store.Ready(f.ctx); err != nil {
 		t.Fatalf("failed transactional migration broke previous runtime: %v", err)
 	}
@@ -506,7 +506,7 @@ func TestGooseMigrationLostCommitAcknowledgement(t *testing.T) {
 	}
 	// A separate, unaffected connection observes the committed application DDL
 	// and both ledgers. No simulated successful return stands in for the commit.
-	checkMigrationVersions(t, f, []int{1, 2})
+	checkMigrationVersions(t, f, []int{1, 2, 3})
 	committed := migrationLedger(t, f)
 	var count int
 	if err := f.owner.QueryRow(f.ctx, "SELECT count(*) FROM heos.commit_ack_probe WHERE id = 1").Scan(&count); err != nil || count != 1 {
@@ -527,11 +527,11 @@ func TestGooseMigrationMetadataFailureRollsBackDDL(t *testing.T) {
 	before := migrationLedger(t, f)
 	files := migrationFiles(t, additiveMigration(`
 CREATE TABLE heos.metadata_atomic_probe(id bigint PRIMARY KEY);
-ALTER TABLE heos.schema_migrations ADD CONSTRAINT reject_probe_version CHECK (version <> 2);`))
+ALTER TABLE heos.schema_migrations ADD CONSTRAINT reject_probe_version CHECK (version <> 3);`))
 	if err := migrate(f.ctx, d, files); err == nil {
 		t.Fatal("migration succeeded despite rejecting its application metadata row")
 	}
-	checkMigrationVersions(t, f, []int{1})
+	checkMigrationVersions(t, f, []int{1, 2})
 	if !reflect.DeepEqual(migrationLedger(t, f), before) {
 		t.Fatal("failed metadata insert changed committed migration history")
 	}

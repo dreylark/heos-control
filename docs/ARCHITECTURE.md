@@ -136,7 +136,11 @@ schedule. It verifies the complete queue and the current media ID/queue ID pair.
 Missed volume steps are skipped instead of being sent in a burst.
 
 Natural transitions and manual Next/Previous within that unchanged queue preserve
-the original schedule. Stop or `unknown` suspends writes for up to twelve seconds,
+the original schedule. `POST /skip` does not. It is a separate direct mutation:
+without takeover it is refused while an operation owns the player, and takeover
+releases the run, including the stop timer, before sending one native next or
+previous command. Confirmation is bounded readback of a different current entry
+in the same complete queue, not the native reply. Stop or `unknown` suspends writes for up to twelve seconds,
 capped by the playback deadline. A temporary mismatched media/queue ID pair can
 also enter that read-only wait when both identifiers belong to the owned queue.
 Resume requires confirmed Play with the exact pair and unchanged controls.
