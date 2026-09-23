@@ -27,8 +27,11 @@ heos "$HEOS_URL/v1/sources/music-library/items" | jq
 ```
 
 Player results include availability, freshness, an observation revision,
-capabilities and visible active operation. Unknown/stale state does not authorize
-writes. The revision is also exposed as a quoted `ETag` on player detail.
+capabilities, `volume_ceiling` and visible active operation. `volume_ceiling` is
+the highest HEOS level a write to that player may request, or null when no
+verified ceiling is configured. It is configuration, so it does not by itself
+change `revision`. Unknown/stale state does not authorize writes. The revision
+is also exposed as a quoted `ETag` on player detail.
 
 Player list, detail and preflight always include `now_playing`. For example,
 the field can contain:

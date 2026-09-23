@@ -132,6 +132,9 @@ func TestNowPlayingResponseContractForListDetailAndPreflight(t *testing.T) {
 				if revision != nil && revision != player["revision"] {
 					t.Fatalf("unchanged evidence has different revisions: %v and %v", revision, player["revision"])
 				}
+				if player["volume_ceiling"] != float64(40) {
+					t.Fatalf("volume ceiling: %v", player["volume_ceiling"])
+				}
 				revision = player["revision"]
 				if wantNull {
 					if media != nil {
