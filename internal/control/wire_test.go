@@ -581,7 +581,7 @@ func TestPlaybackWireOrderReadbackAndReplay(t *testing.T) {
 				assertWireScalarFallback(t, requests, requestTimes)
 			}
 			if tc.failedVolumeReply || tc.volumeIntervention {
-				assertWireScalarNotConfirmed(t, requests, o)
+				assertWireScalarNotConfirmed(t, requests, o, tc.failedVolumeReply)
 			}
 		})
 	}

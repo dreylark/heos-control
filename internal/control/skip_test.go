@@ -20,12 +20,12 @@ func TestSkipAdmissionRules(t *testing.T) {
 	volume := 20
 	ceiling := 40
 	base := heos.Snapshot{State: "play", Volume: &volume, Media: &media, Queue: queue}
-	if err := skipAdmissible(&ceiling, base); err != nil {
+	if err := skipAdmissible(&ceiling, "next", base); err != nil {
 		t.Fatal(err)
 	}
 	paused := base
 	paused.State = "pause"
-	if err := skipAdmissible(&ceiling, paused); err != nil {
+	if err := skipAdmissible(&ceiling, "previous", paused); err != nil {
 		t.Fatal(err)
 	}
 	for _, tc := range []struct {
@@ -45,11 +45,57 @@ func TestSkipAdmissionRules(t *testing.T) {
 			s.Media = cloneMedia(base.Media)
 			s.Queue.Items = append([]heos.Media(nil), base.Queue.Items...)
 			tc.edit(&s)
-			if err := skipAdmissible(&ceiling, s); !errors.Is(err, tc.want) {
+			if err := skipAdmissible(&ceiling, "next", s); !errors.Is(err, tc.want) {
 				t.Fatal(err)
 			}
 		})
 	}
+}
+
+func TestSkipAdmissibleRejectsRepeatOffBoundaries(t *testing.T) {
+	volume := 20
+	ceiling := 40
+	first := heos.Media{Source: "1024", ID: "track-1", QueueID: "1"}
+	second := heos.Media{Source: "1024", ID: "track-2", QueueID: "2"}
+	one := heos.Snapshot{State: "play", Volume: &volume, Repeat: "off", Media: &first, Queue: heos.QueuePage{Items: []heos.Media{first}, Total: intPtr(1)}}
+	two := heos.Snapshot{State: "play", Volume: &volume, Repeat: "off", Media: &second, Queue: heos.QueuePage{Items: []heos.Media{first, second}, Total: intPtr(2)}}
+	for _, tc := range []struct {
+		name, direction string
+		s               heos.Snapshot
+		want            error
+	}{
+		{name: "single next", direction: "next", s: one, want: ErrNotSkippable},
+		{name: "single previous", direction: "previous", s: one, want: ErrNotSkippable},
+		{name: "single shuffled next", direction: "next", s: shuffled(one), want: ErrNotSkippable},
+		{name: "last next", direction: "next", s: two, want: ErrNotSkippable},
+		{name: "first previous", direction: "previous", s: atQueueStart(two, first), want: ErrNotSkippable},
+		{name: "repeat all still sent", direction: "next", s: withRepeat(one, "on_all")},
+		{name: "repeat one still sent", direction: "previous", s: withRepeat(one, "on_one")},
+		{name: "shuffled last still sent", direction: "next", s: shuffled(two)},
+		{name: "middle next", direction: "next", s: atQueueStart(two, first)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := skipAdmissible(&ceiling, tc.direction, tc.s)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("got %v, want %v", err, tc.want)
+			}
+		})
+	}
+}
+
+func withRepeat(s heos.Snapshot, repeat string) heos.Snapshot {
+	s.Repeat = repeat
+	return s
+}
+
+func shuffled(s heos.Snapshot) heos.Snapshot {
+	s.Shuffle = true
+	return s
+}
+
+func atQueueStart(s heos.Snapshot, media heos.Media) heos.Snapshot {
+	s.Media = &media
+	return s
 }
 
 func TestSkipConfirmationRecognizesOnlyADifferentQueuedEntry(t *testing.T) {
@@ -190,6 +236,119 @@ func TestSkipReleasesWhenTheQueueOrControlsChange(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSkipRejectsQueueBoundaryBeforeSending(t *testing.T) {
+	for _, tc := range []struct {
+		name, direction string
+		from, items     int
+	}{
+		{name: "only entry next", direction: "next", from: 0, items: 1},
+		{name: "only entry previous", direction: "previous", from: 0, items: 1},
+		{name: "last next", direction: "next", from: 3, items: 4},
+		{name: "first previous", direction: "previous", from: 0, items: 4},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, j, d, req := skipFixture(t, "", tc.from, 0)
+			if tc.items == 1 {
+				item := d.tracks[0]
+				total := 1
+				d.s.Queue = heos.QueuePage{Items: []heos.Media{item}, Total: &total}
+				d.s.Media = &d.s.Queue.Items[0]
+			}
+			if _, err := c.Submit(context.Background(), skipRequest(c, req), Command{Kind: "skip", Direction: tc.direction}); !errors.Is(err, ErrNotSkippable) {
+				t.Fatal(err)
+			}
+			if len(d.writes) != 0 || len(j.ops) != 0 {
+				t.Fatal("boundary skip had side effects", d.writes, j.ops)
+			}
+		})
+	}
+}
+
+func TestSkipStillSendsWhenRepeatCanWrap(t *testing.T) {
+	c, j, d, req := skipFixture(t, "", 3, 0)
+	d.s.Repeat = "on_all"
+	a, err := c.Submit(context.Background(), skipRequest(c, req), Command{Kind: "skip", Direction: "next"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := awaitOperation(t, j, a.ID)
+	if o.State != journal.Succeeded || len(d.writes) != 1 || d.writes[0].Kind != "skip" {
+		t.Fatal(o, d.writes)
+	}
+}
+
+func TestSkipRejectsABoundaryDiscoveredBeforeSending(t *testing.T) {
+	c, j, d, req := skipFixture(t, "boundary-before-send", 0, 1)
+	a, err := c.Submit(context.Background(), skipRequest(c, req), Command{Kind: "skip", Direction: "next"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := awaitOperation(t, j, a.ID)
+	if o.State != journal.Failed || o.ErrorCode != "not_skippable" || len(d.writes) != 0 {
+		t.Fatal(o, d.writes)
+	}
+}
+
+func TestSkipLimitReachedLeavesVolumeAndStopAdmissible(t *testing.T) {
+	c, j, d, req := skipFixture(t, "limit", 0, 1)
+	a, err := c.Submit(context.Background(), skipRequest(c, req), Command{Kind: "skip", Direction: "next"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := awaitOperation(t, j, a.ID)
+	var outcome struct {
+		Delivery string `json:"delivery"`
+	}
+	if err := json.Unmarshal(o.Outcome, &outcome); err != nil {
+		t.Fatal(err)
+	}
+	if o.State != journal.Failed || o.ErrorCode != "device_rejected" || outcome.Delivery != "rejected" {
+		t.Fatalf("rejected skip: %+v", o)
+	}
+	volume := playerRequest(c, req, "volume-after-skip", "PUT", "/v1/players/room/volume")
+	accepted, err := c.Submit(context.Background(), volume, Command{Kind: "volume", Level: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vo := awaitOperation(t, j, accepted.ID); vo.State != journal.Succeeded {
+		t.Fatal(vo)
+	}
+	stop := playerRequest(c, req, "stop-after-skip", "PUT", "/v1/players/room/transport")
+	accepted, err = c.Submit(context.Background(), stop, Command{Kind: "transport", State: "stop"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if so := awaitOperation(t, j, accepted.ID); so.State != journal.Succeeded {
+		t.Fatal(so)
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var skips, volumes, stops int
+	for _, m := range d.writes {
+		switch m.Kind {
+		case "skip":
+			skips++
+		case "volume":
+			volumes++
+		case "transport":
+			if m.State == "stop" {
+				stops++
+			}
+		}
+	}
+	if skips != 1 || volumes != 1 || stops != 1 {
+		t.Fatal(d.writes)
+	}
+}
+
+func playerRequest(c *Coordinator, req journal.Request, key, method, endpoint string) journal.Request {
+	req = skipRequest(c, req)
+	req.Key = key
+	req.Method = method
+	req.Endpoint = endpoint
+	return req
 }
 
 func TestSkipRejectsUnusableObservationsBeforeSending(t *testing.T) {
@@ -350,6 +509,21 @@ type skipDevice struct {
 	settleAt time.Time
 }
 
+func (d *skipDevice) Write(ctx context.Context, m heos.Mutation, guard heos.Guard) (heos.Response, error) {
+	if d.mode == "limit" && m.Kind == "skip" {
+		d.mu.Lock()
+		d.sent = true
+		d.writes = append(d.writes, m)
+		d.mu.Unlock()
+		command := "player/play_next"
+		if m.Direction == "previous" {
+			command = "player/play_previous"
+		}
+		return heos.Response{}, &heos.CommandError{Delivery: heos.Rejected, Cause: &heos.DeviceError{Command: command, Code: 17}}
+	}
+	return d.albumDevice.Write(ctx, m, guard)
+}
+
 func (d *skipDevice) Refresh(ctx context.Context) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -357,8 +531,17 @@ func (d *skipDevice) Refresh(ctx context.Context) error {
 		d.s.ObservedAt = d.now()
 	}
 	if !d.sent {
-		if d.mode == "stopped-before-send" {
+		switch d.mode {
+		case "stopped-before-send":
 			d.s.State = "stop"
+		case "boundary-before-send":
+			if d.s.Media != nil {
+				item := *d.s.Media
+				total := 1
+				d.s.Queue = heos.QueuePage{Items: []heos.Media{item}, Total: &total}
+				current := item
+				d.s.Media = &current
+			}
 		}
 		return ctx.Err()
 	}

@@ -930,8 +930,12 @@ paths:
         Requires control scope. Takeover additionally requires operator scope.
         Sends one native next or previous command for the current queue entry.
         Admission requires Play or Pause, a verified volume at or below the player
-        ceiling, and an exact current entry in the complete queue. Confirmation
-        requires a different entry in that same queue and settled play or pause
+        ceiling, and an exact current entry in the complete queue. With repeat off,
+        a single entry is not skippable in either direction, and with shuffle also
+        off the last entry rejects next and the first entry rejects previous.
+        Those cases return 422 not_skippable and send nothing. Repeat on_all and
+        on_one are still sent. Confirmation requires a different entry in that
+        same queue and settled play or pause
         within twelve seconds. The native success reply does not identify the new
         entry. Transitional stop/unknown or mixed MID/QID from the same queue
         permits only waiting; newer events must be reconciled before confirmation.
