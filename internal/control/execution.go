@@ -84,7 +84,7 @@ func (c *Coordinator) writeOnce(l *lane, r *execution, m heos.Mutation) (err err
 		return e
 	}
 	if m.Kind == "skip" {
-		before, fresh, e = c.prepareSkip(r.ctx, l, before, fresh)
+		before, fresh, e = c.prepareSkip(r.ctx, l, m.Direction, before, fresh)
 		if e != nil {
 			return e
 		}
@@ -138,6 +138,7 @@ func (c *Coordinator) writeOnce(l *lane, r *execution, m heos.Mutation) (err err
 		if !errors.As(e, &ce) || ce.Delivery == heos.Uncertain {
 			r.uncertain = true
 		}
+		r.rejectedWrite = ce != nil && ce.Delivery == heos.Rejected
 	}
 	r.mu.Unlock()
 	if e != nil {
@@ -309,6 +310,15 @@ func (c *Coordinator) execute(l *lane, r *execution, cmd Command, item heos.Item
 	r.mu.Unlock()
 	final := journal.Update{State: state, Phase: "complete", ErrorCode: code, Outcome: json.RawMessage(fmt.Sprintf(`{"delivery":%q,"playback_may_continue":%t,"commands_confirmed":%d}`, outcome, mayContinue, confirmed))}
 	final.Outcome = c.annotateOutcome(final.Outcome, c.completionDiagnostics(r, e, code))
+	if r.rejectedWrite {
+		// Even a rejected send advances the local write revision. Restore the
+		// observer baseline for later admission without replaying the command.
+		// Capture the final outcome first: recovery failures or their events
+		// must not replace the evidence of the original rejection.
+		recovery, stop := context.WithTimeout(heos.WithObservationTrigger(r.ctx, "recovery"), 5*time.Second)
+		_ = l.device.Observer.Refresh(recovery)
+		stop()
+	}
 	// Device work is finished; only target/worker journal reconciliation remains.
 	r.metrics.phase("persisting")
 	if cmd.Kind == "cancel" {

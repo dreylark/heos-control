@@ -100,6 +100,7 @@ type execution struct {
 	inflight         bool
 	uncertain        bool
 	unconfirmed      bool
+	rejectedWrite    bool // worker-owned; read failures do not trigger write recovery
 	members          map[heos.ID]bool
 	confirmed        int
 	playbackDeadline time.Time           // worker-owned monotonic end of the envelope
@@ -443,7 +444,7 @@ func (c *Coordinator) Submit(ctx context.Context, request journal.Request, cmd C
 		if e != nil {
 			return journal.Operation{}, e
 		}
-		if e = skipAdmissible(l.device.Config.VolumeCeiling, s); e != nil {
+		if e = skipAdmissible(l.device.Config.VolumeCeiling, cmd.Direction, s); e != nil {
 			return journal.Operation{}, e
 		}
 	}

@@ -191,18 +191,19 @@ func maxTime(a, b time.Time) time.Time {
 }
 
 type tlsReplayDevice struct {
-	mu         sync.Mutex
-	writeMu    sync.Mutex
-	state      heos.Snapshot
-	fixture    replayFixture
-	clock      *tlsReplayClock
-	ctx        context.Context
-	cancel     context.CancelCauseFunc
-	commands   []string
-	levels     []int
-	occurrence map[string]int
-	conns      []net.Conn
-	wg         sync.WaitGroup
+	mu             sync.Mutex
+	writeMu        sync.Mutex
+	state          heos.Snapshot
+	fixture        replayFixture
+	clock          *tlsReplayClock
+	ctx            context.Context
+	cancel         context.CancelCauseFunc
+	commands       []string
+	levels         []int
+	occurrence     map[string]int
+	rejectionCodes map[string]int
+	conns          []net.Conn
+	wg             sync.WaitGroup
 }
 
 func replayWireMutation(name string) bool {
@@ -260,7 +261,11 @@ func (d *tlsReplayDevice) step(conn net.Conn, name string, params url.Values, st
 		result := "success"
 		if step.Result == "rejected" {
 			result = "fail"
-			params.Set("eid", "14")
+			code := d.rejectionCodes[name]
+			if code == 0 {
+				code = 14
+			}
+			params.Set("eid", strconv.Itoa(code))
 		}
 		d.frame(conn, name, result, params, nil)
 	case "disconnect":

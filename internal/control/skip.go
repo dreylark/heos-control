@@ -16,14 +16,52 @@ var ErrNotSkippable = errors.New("current queue entry cannot be skipped")
 // skipAdmissible requires a complete queue and an exact current member.
 // HEOS CLI Protocol Specification 1.17 sections 4.2.21 and 4.2.22 acknowledge
 // play_next/play_previous with pid only, so confirmation needs this baseline.
-func skipAdmissible(ceiling *int, s heos.Snapshot) error {
+// Repeat off at a boundary that cannot move is rejected before any command:
+// a single entry in either direction, or, with shuffle also off, next on the
+// last entry and previous on the first. Repeat on_all and on_one are still sent.
+func skipAdmissible(ceiling *int, direction string, s heos.Snapshot) error {
 	if ceiling == nil || s.Volume == nil || *s.Volume > *ceiling {
 		return heos.ErrBounds
 	}
 	if (s.State != "play" && s.State != "pause") || !completeQueuePage(s.Queue) || !queuedMedia(s.Queue, s.Media) {
 		return ErrNotSkippable
 	}
+	if atSkipBoundary(direction, s) {
+		return ErrNotSkippable
+	}
 	return nil
+}
+
+// atSkipBoundary is true when repeat is off and this direction has nowhere to go.
+// Shuffle can leave the current index, so a longer queue is not judged by index.
+// A single entry has nowhere to go even when shuffle is on.
+func atSkipBoundary(direction string, s heos.Snapshot) bool {
+	if s.Repeat != "off" || (direction != "next" && direction != "previous") {
+		return false
+	}
+	if len(s.Queue.Items) == 1 {
+		return true
+	}
+	if s.Shuffle {
+		return false
+	}
+	index := queueIndex(s)
+	if index < 0 {
+		return false
+	}
+	return (direction == "next" && index == len(s.Queue.Items)-1) || (direction == "previous" && index == 0)
+}
+
+func queueIndex(s heos.Snapshot) int {
+	if s.Media == nil {
+		return -1
+	}
+	for i, item := range s.Queue.Items {
+		if item.QueueID == s.Media.QueueID && item.ID == s.Media.ID {
+			return i
+		}
+	}
+	return -1
 }
 
 func completeQueuePage(q heos.QueuePage) bool {
@@ -83,14 +121,14 @@ func (r *execution) acceptSkipReadback(ctx context.Context, before, after heos.S
 	return true, nil
 }
 
-func (c *Coordinator) prepareSkip(ctx context.Context, l *lane, before, fresh heos.Snapshot) (heos.Snapshot, heos.Snapshot, error) {
+func (c *Coordinator) prepareSkip(ctx context.Context, l *lane, direction string, before, fresh heos.Snapshot) (heos.Snapshot, heos.Snapshot, error) {
 	readctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	completed, err := completeQueue(readctx, l, fresh)
 	if err != nil {
 		return before, fresh, err
 	}
-	if err = skipAdmissible(l.device.Config.VolumeCeiling, completed); err != nil {
+	if err = skipAdmissible(l.device.Config.VolumeCeiling, direction, completed); err != nil {
 		return before, fresh, err
 	}
 	if queueExtension(before.Queue, completed.Queue) {

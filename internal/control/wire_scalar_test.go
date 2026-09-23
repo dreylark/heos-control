@@ -28,19 +28,32 @@ func assertWireScalarFallback(t *testing.T, requests []string, times []time.Time
 	}
 }
 
-func assertWireScalarNotConfirmed(t *testing.T, requests []string, operation journal.Operation) {
+func assertWireScalarNotConfirmed(t *testing.T, requests []string, operation journal.Operation, rejected bool) {
 	t.Helper()
 	set := slices.Index(requests, "player/set_volume")
-	if set < 0 || set != len(requests)-1 {
-		t.Errorf("rejected/interrupted setter triggered further wire commands: %v", requests)
+	if set < 0 {
+		t.Fatal("fixture did not send the volume setter", requests)
+	}
+	var want []string
+	if rejected {
+		// A definite device refusal permits one full read-only recovery of the
+		// consumed write token. Manual intervention still stops all device I/O.
+		want = []string{"player/get_players", "group/get_groups", "player/get_play_state", "player/get_volume", "player/get_mute", "player/get_play_mode", "player/get_now_playing_media", "player/get_queue"}
+	}
+	if got := requests[set+1:]; !slices.Equal(got, want) {
+		t.Errorf("unexpected wire commands after rejected/interrupted setter: got %v, want %v", got, want)
 	}
 	var outcome struct {
-		Confirmed int `json:"commands_confirmed"`
+		Confirmed int    `json:"commands_confirmed"`
+		Delivery  string `json:"delivery"`
 	}
 	if err := json.Unmarshal(operation.Outcome, &outcome); err != nil {
 		t.Fatal(err)
 	}
 	if outcome.Confirmed != 0 {
 		t.Errorf("target event incorrectly confirmed a rejected/interrupted command: %s", operation.Outcome)
+	}
+	if rejected && (operation.State != journal.Failed || operation.ErrorCode != "device_rejected" || outcome.Delivery != "rejected") {
+		t.Errorf("recovery changed the rejected setter outcome: %+v", operation)
 	}
 }

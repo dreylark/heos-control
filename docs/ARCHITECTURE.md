@@ -89,6 +89,7 @@ command; duplicate notifications with the currently confirmed values are benign.
 | Now-playing notification | Coalesced metadata read against the retained complete queue |
 | Queue/group/global changes, malformed events or gaps | Invalidate state; full observation is required |
 | Normal active volume step or hold | Confirmed event-maintained state; no full read before or after the setter |
+| Explicit device rejection of a write | One full observation, bounded by five seconds and operation cancellation; the rejection result is retained |
 | Baseline audit | Full observation every 300 seconds; cache TTL is 310 seconds |
 
 Event projections and metadata reads retain the last full `ObservedAt`; they do
