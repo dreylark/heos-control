@@ -75,10 +75,19 @@ type Player struct {
 	PlaybackState   string       `json:"playback_state"`
 	NowPlaying      *NowPlaying  `json:"now_playing"`
 	Volume          Volume       `json:"volume"`
+	VolumeCeiling   *int         `json:"volume_ceiling"`
 	Muted           *bool        `json:"muted"`
 	Grouped         *bool        `json:"grouped"`
 	Capabilities    Capabilities `json:"capabilities"`
 	ActiveOperation *string      `json:"active_operation"`
+}
+
+func cloneInt(v *int) *int {
+	if v == nil {
+		return nil
+	}
+	n := *v
+	return &n
 }
 
 func (s *Reads) Player(key string) (Player, error) {
@@ -87,7 +96,7 @@ func (s *Reads) Player(key string) (Player, error) {
 		return Player{}, e
 	}
 	v := d.Observer.Snapshot()
-	p := Player{Key: key, Availability: "offline", Stale: v.Stale, PlaybackState: "unknown", Volume: Volume{Unit: "heos", Level: v.Volume}, Muted: v.Muted, Capabilities: Capabilities{"unverified", "unverified", "unverified"}}
+	p := Player{Key: key, Availability: "offline", Stale: v.Stale, PlaybackState: "unknown", Volume: Volume{Unit: "heos", Level: v.Volume}, VolumeCeiling: cloneInt(d.Config.VolumeCeiling), Muted: v.Muted, Capabilities: Capabilities{"unverified", "unverified", "unverified"}}
 	if v.Connected {
 		p.Availability = "unknown"
 	}

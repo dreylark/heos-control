@@ -1147,6 +1147,13 @@ components:
               - 'null'
               minimum: 0
               maximum: 100
+        volume_ceiling:
+          description: Highest HEOS volume level a write to this player may request. Null when no verified ceiling is configured. This is player configuration, not a live observation, and does not by itself change revision.
+          type:
+          - integer
+          - 'null'
+          minimum: 0
+          maximum: 100
         muted:
           type:
           - boolean
