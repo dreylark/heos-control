@@ -80,8 +80,9 @@ updates do not renew it.
 `duration_ms` is absent when the device does not know the duration. The object
 is present for fresh Play or Pause after a sample bound to that media. It is
 absent while media is stale or unverified, and whenever `now_playing` is null.
-A full observation or a change of media identity clears progress. Delayed samples
-received before that boundary are discarded.
+A change of media identity clears progress. A full observation keeps the last
+sample when it still belongs to the current media. Delayed samples received
+before that boundary are discarded.
 The service does not interpolate between samples and does not provide seek.
 Playhead samples are outside player `revision` and the detail ETag, so
 `If-Match` and `player_changed` stay tied to control and media changes. To move

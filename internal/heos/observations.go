@@ -384,6 +384,9 @@ func (o *Observer) refresh(ctx context.Context, force bool) error {
 	if s.Queue.Token != s.Token || view.Token != s.Token || !view.Connected {
 		return ErrStale
 	}
+	// The full read has no playhead of its own. Keep the last sample when it
+	// still belongs to this media; Pause does not emit a replacement.
+	s.Playhead = o.playheadForMedia(s.Media, s.State)
 	o.progressAfter = o.client.progressSequence.Load()
 	o.last = s
 	o.invalid = false
