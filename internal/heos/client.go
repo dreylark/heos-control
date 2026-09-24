@@ -79,6 +79,8 @@ type Event struct {
 	GapReason string
 	data      EventData
 	decoded   bool
+	// progressSequence orders display samples independently of control revisions.
+	progressSequence uint64
 }
 type View struct {
 	Token     Token
@@ -136,6 +138,9 @@ type Client struct {
 	everReady    bool          // Owner only; a previous usable subscription existed.
 	players      map[ID]uint64 // Only explicitly observed players; bounded, mutex protected.
 	writes       map[ID]playerWrite
+
+	// Received progress samples never participate in the control token.
+	progressSequence atomic.Uint64
 }
 
 type playerWrite struct {
@@ -431,7 +436,12 @@ func (c *Client) event(r Response) {
 	// Denon 5.6 progress is best-effort telemetry, not a control revision.
 	// Dropping only progress when full must not erase queued control events.
 	if data.Kind == EventProgress && data.Valid {
-		event.Token = c.PlayerView(data.Player).Token
+		c.mu.Lock()
+		event.progressSequence = c.progressSequence.Add(1)
+		event.Token = c.view.Token
+		event.Token.Player = c.players[data.Player]
+		event.Token.Write = c.writes[data.Player].revision
+		c.mu.Unlock()
 		select {
 		case c.events <- event:
 		default:

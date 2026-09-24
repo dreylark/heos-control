@@ -12,7 +12,12 @@ func (o *Observer) Notify(e Event) {
 	e = e.Decode()
 	data := e.Data()
 	if !e.Gap && data.Kind == EventProgress && data.Valid {
-		return // Progress can carry a newer Write stamp without a control event.
+		// Progress can carry a newer Write stamp without a control event.
+		// Store a display sample only; do not move the token or schedule a read.
+		if data.HasProgress {
+			o.recordProgress(e)
+		}
+		return
 	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -117,6 +122,7 @@ func applyObservedEvent(s *Snapshot, e Event) bool {
 		s.State = d.State
 		if d.State == "stop" || d.State == "unknown" {
 			s.MediaStale = true
+			s.Playhead = nil
 		}
 	case EventVolume:
 		s.Volume, s.Muted = &d.Volume, &d.Muted
@@ -161,9 +167,59 @@ func (o *Observer) refreshMedia(ctx context.Context, s Snapshot) (err error) {
 	}
 	s.Media = &media
 	s.MediaStale = s.State != "play" && s.State != "pause"
+	s.Playhead = o.playheadForMedia(s.Media, s.State)
 	s.EventUpdated = true
 	o.last = s
 	o.mediaPending = false
 	o.signalChanged()
 	return nil
+}
+
+// recordProgress keeps the newest in-range sample for the fresh current media.
+// A now-playing hint has no MID/QID, so samples are refused until that read settles.
+func (o *Observer) recordProgress(e Event) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	data := e.Data()
+	s := &o.last
+	if e.progressSequence <= o.progressAfter || !o.progressRecordable(s, data.Player, e.Token) {
+		return
+	}
+	o.progressAfter = e.progressSequence
+	s.Playhead = &Playhead{
+		PositionMS: data.Position, DurationMS: data.Duration, At: o.now(),
+		Source: s.Media.Source, Media: s.Media.ID, Queue: s.Media.QueueID,
+	}
+}
+
+func (o *Observer) progressRecordable(s *Snapshot, player ID, token Token) bool {
+	if o.invalid || o.mediaPending || s.MediaStale || s.Media == nil || player == "" || player != s.Player.ID {
+		return false
+	}
+	if s.State != "play" && s.State != "pause" {
+		return false
+	}
+	view := o.client.PlayerView(s.Player.ID)
+	age := o.now().Sub(s.ObservedAt)
+	// Ignore only write counters: a scalar send may precede its confirming event.
+	// The sample must still belong to this connection and observed event history.
+	return view.Connected && sameGlobal(view.Token, s.Token) && view.Token.Player == s.Token.Player &&
+		sameGlobal(token, s.Token) && token.Player == s.Token.Player && age >= 0 && age < o.ttl
+}
+
+// Called with o.mu held when publishing a targeted read. A changed media
+// identity also fences queued samples, even if no control event changed Token.
+// Same-identity reads retain the latest sample accepted while the read ran.
+func (o *Observer) playheadForMedia(media *Media, state string) *Playhead {
+	old := o.last.Media
+	if old == nil || media == nil || old.Source != media.Source || old.ID != media.ID || old.QueueID != media.QueueID ||
+		(o.last.State != "play" && o.last.State != "pause") || (state != "play" && state != "pause") {
+		o.progressAfter = o.client.progressSequence.Load()
+		return nil
+	}
+	sample := o.last.Playhead
+	if sample == nil || sample.Source != media.Source || sample.Media != media.ID || sample.Queue != media.QueueID {
+		return nil
+	}
+	return clonePtr(sample)
 }

@@ -220,7 +220,7 @@ paths:
                 type: string
                 const: no-store
             ETag:
-              description: Quoted Player.revision, including process epoch and the complete now_playing projection. An opaque equality token, not a counter or track ID. Conditional GET is not supported.
+              description: Quoted Player.revision, including process epoch and now_playing identity, display fields and freshness. now_playing.progress is excluded. An opaque equality token, not a counter or track ID. Conditional GET is not supported.
               schema:
                 type: string
         default:
@@ -1119,7 +1119,7 @@ components:
         stale:
           type: boolean
         revision:
-          description: Opaque equality token scoped to the running service. Includes current-media identity, display fields, freshness and object/null changes as well as existing state and observation inputs.
+          description: Opaque equality token scoped to the running service. Includes current-media identity, display fields, freshness and object/null changes as well as existing state and observation inputs. now_playing.progress is outside this token.
           type: string
           maxLength: 160
         playback_state:
@@ -1237,6 +1237,37 @@ components:
         stale:
           type: boolean
           description: Last known display data awaiting confirmation or backed by a stale baseline. Always true when Player.stale is true; may also be true while scalar state remains fresh. Never confirms a new track or grants write permission.
+        progress:
+          description: |
+            Last-sampled playhead in milliseconds for this fresh Play or Pause media.
+            Omitted while media is stale or unverified, and whenever now_playing is null.
+            duration_ms is omitted when the device reports an unknown duration.
+            The service does not interpolate between samples and does not accept seeks.
+            This object is outside Player.revision and the detail ETag, so player_changed
+            is not emitted for a progress-only update. Poll the player about once per
+            second for a moving display. An unchanged sampled_at means no newer sample
+            has arrived; that is not a pause. Firmware emission interval is not a
+            qualified guarantee.
+          type: object
+          additionalProperties: false
+          required:
+          - position_ms
+          - sampled_at
+          properties:
+            position_ms:
+              type: integer
+              format: int64
+              minimum: 0
+              description: Last accepted position, including zero.
+            duration_ms:
+              type: integer
+              format: int64
+              minimum: 1
+              description: Last accepted duration. Omitted when the device reports zero, meaning unknown.
+            sampled_at:
+              type: string
+              format: date-time
+              description: Time this service accepted the sample.
       x-go-type: control.NowPlaying
       x-go-type-import:
         path: github.com/dreylark/heos-control/internal/control

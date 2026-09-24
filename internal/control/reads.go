@@ -123,7 +123,7 @@ func (s *Reads) Player(key string) (Player, error) {
 		At                         time.Time
 		Stale, Connected, Verified bool
 		NowPlaying                 *NowPlaying
-	}{s.epoch, v.Token, v.ObservedAt, v.Stale, v.Connected, v.Verified, p.NowPlaying})
+	}{s.epoch, v.Token, v.ObservedAt, v.Stale, v.Connected, v.Verified, revisionNowPlaying(p.NowPlaying)})
 	p.Revision = fmt.Sprintf("%s-%x", s.epoch, sha256.Sum256(b))
 	return p, nil
 }

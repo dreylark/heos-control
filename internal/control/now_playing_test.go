@@ -178,6 +178,57 @@ func TestPlayerMediaIDScopeAndStability(t *testing.T) {
 	}
 }
 
+func TestPlayerPlayheadIsLastSampleAndOutsideRevision(t *testing.T) {
+	at := time.Unix(100, 0).UTC()
+	base := mediaSnapshot()
+	base.Playhead = &heos.Playhead{
+		PositionMS: 0, DurationMS: 0, At: at,
+		Source: base.Media.Source, Media: base.Media.ID, Queue: base.Media.QueueID,
+	}
+	reads, observation := mediaReads("epoch", "room", base)
+	player, media := playerMediaJSON(t, reads, "room")
+	progress, _ := media["progress"].(map[string]any)
+	if progress["position_ms"] != float64(0) || progress["sampled_at"] != "1970-01-01T00:01:40Z" {
+		t.Fatalf("zero position: %v", progress)
+	}
+	if _, ok := progress["duration_ms"]; ok {
+		t.Fatalf("unknown duration was projected: %v", progress)
+	}
+	bare, _ := mediaReads("epoch", "room", mediaSnapshot())
+	without, _ := bare.Player("room")
+	if without.Revision != player.Revision {
+		t.Fatal("adding a playhead changed revision")
+	}
+	observation.value.Playhead.PositionMS = 1500
+	observation.value.Playhead.DurationMS = 2000
+	next, media := playerMediaJSON(t, reads, "room")
+	progress, _ = media["progress"].(map[string]any)
+	if next.Revision != player.Revision || progress["position_ms"] != float64(1500) || progress["duration_ms"] != float64(2000) {
+		t.Fatalf("playhead movement changed revision or dropped duration: rev %s %s progress %v", player.Revision, next.Revision, progress)
+	}
+	observation.value.Stale = true
+	_, media = playerMediaJSON(t, reads, "room")
+	if _, ok := media["progress"]; ok || media["stale"] != true {
+		t.Fatalf("stale baseline kept a playhead: %v", media)
+	}
+	observation.value.Stale = false
+	observation.value.MediaStale = true
+	_, media = playerMediaJSON(t, reads, "room")
+	if _, ok := media["progress"]; ok || media["stale"] != true {
+		t.Fatalf("unverified media kept a playhead: %v", media)
+	}
+	observation.value.MediaStale = false
+	observation.value.Playhead.Media = "other"
+	_, media = playerMediaJSON(t, reads, "room")
+	if _, ok := media["progress"]; ok {
+		t.Fatalf("sample bound to other media was projected: %v", media)
+	}
+	observation.value.State = "stop"
+	if _, media = playerMediaJSON(t, reads, "room"); media != nil {
+		t.Fatalf("stop kept now_playing: %v", media)
+	}
+}
+
 func TestMediaChangeFencesNewAdmissionButNotAcceptedRetry(t *testing.T) {
 	c, db, device, request := fixtureCoordinator(t)
 	device.mu.Lock()

@@ -211,11 +211,60 @@ func TestNowPlayingAuthorizationPrecedesSnapshotAccess(t *testing.T) {
 	}
 }
 
+func TestNowPlayingProgressContract(t *testing.T) {
+	s, d, _ := nowPlayingAPI(t)
+	at := time.Unix(100, 0).UTC()
+	d.snapshot.Playhead = &heos.Playhead{
+		PositionMS: 0, DurationMS: 0, At: at,
+		Source: d.snapshot.Media.Source, Media: d.snapshot.Media.ID, Queue: d.snapshot.Media.QueueID,
+	}
+	beforeResponse, before := nowPlayingRequest(t, s, "/v1/players/room", 200)
+	_, list := nowPlayingRequest(t, s, "/v1/players", 200)
+	progress := before["now_playing"].(map[string]any)["progress"].(map[string]any)
+	listProgress := list["now_playing"].(map[string]any)["progress"].(map[string]any)
+	if progress["position_ms"] != float64(0) || progress["sampled_at"] != at.Format(time.RFC3339) || listProgress["position_ms"] != float64(0) {
+		t.Fatalf("zero position: detail=%v list=%v", progress, listProgress)
+	}
+	if _, ok := progress["duration_ms"]; ok {
+		t.Fatalf("unknown duration was returned: %v", progress)
+	}
+	d.snapshot.Playhead.PositionMS = 40
+	d.snapshot.Playhead.DurationMS = 200
+	afterResponse, after := nowPlayingRequest(t, s, "/v1/players/room", 200)
+	if before["revision"] != after["revision"] || beforeResponse.Header().Get("ETag") != afterResponse.Header().Get("ETag") {
+		t.Fatal("playhead movement changed revision or ETag")
+	}
+	progress = after["now_playing"].(map[string]any)["progress"].(map[string]any)
+	if progress["position_ms"] != float64(40) || progress["duration_ms"] != float64(200) {
+		t.Fatalf("duration sample: %v", progress)
+	}
+	d.snapshot.Stale = true
+	_, stale := nowPlayingRequest(t, s, "/v1/players/room", 200)
+	if _, ok := stale["now_playing"].(map[string]any)["progress"]; ok {
+		t.Fatal("stale baseline returned a playhead")
+	}
+	d.snapshot.Stale = false
+	d.snapshot.MediaStale = true
+	_, pending := nowPlayingRequest(t, s, "/v1/players/room", 200)
+	if _, ok := pending["now_playing"].(map[string]any)["progress"]; ok {
+		t.Fatal("unverified media returned a playhead")
+	}
+	d.snapshot.MediaStale = false
+	d.snapshot.State = "stop"
+	_, stopped := nowPlayingRequest(t, s, "/v1/players/room", 200)
+	if stopped["now_playing"] != nil {
+		t.Fatalf("stop kept now_playing: %v", stopped["now_playing"])
+	}
+	if d.calls != 0 {
+		t.Fatal("playhead reads reached the device")
+	}
+}
+
 func TestNowPlayingContractRejectsMissingFieldsAndPrivateExtensions(t *testing.T) {
 	s, _, _ := nowPlayingAPI(t)
 	_, player := nowPlayingRequest(t, s, "/v1/players/room", 200)
 	r := httptest.NewRequest("GET", "/v1/players/room", nil)
-	for _, name := range []string{"omitted", "wrong type", "missing song", "missing album", "missing artist", "missing stale", "null song", "null queue id", "raw media id", "private source", "artwork", "progress", "nested timestamp"} {
+	for _, name := range []string{"omitted", "wrong type", "missing song", "missing album", "missing artist", "missing stale", "null song", "null queue id", "raw media id", "private source", "artwork", "progress", "partial playhead", "zero duration", "nested timestamp"} {
 		t.Run(name, func(t *testing.T) {
 			media := map[string]any{"song": "Song", "album": "Album", "artist": "Artist", "stale": false}
 			player["now_playing"] = media
@@ -238,6 +287,10 @@ func TestNowPlayingContractRejectsMissingFieldsAndPrivateExtensions(t *testing.T
 				media["image_url"] = "https://private.invalid/image.jpg"
 			case "progress":
 				media["position"] = 10
+			case "partial playhead":
+				media["progress"] = map[string]any{"position_ms": 1}
+			case "zero duration":
+				media["progress"] = map[string]any{"position_ms": 1, "duration_ms": 0, "sampled_at": "1970-01-01T00:01:40Z"}
 			case "nested timestamp":
 				media["observed_at"] = "2026-01-01T00:00:00Z"
 			}

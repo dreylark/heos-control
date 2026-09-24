@@ -98,8 +98,10 @@ not establish where those IDs came from.
 State events (5.4) report state, not transition origin. Now-playing and queue
 notifications (5.5, 5.8) do not contain enough information to prove current media
 membership. Valid volume/mute, repeat and shuffle events (5.9–5.11) can confirm
-their reported controls; progress (5.6) is not ownership evidence and triggers no
-read. Missing, duplicate or malformed **fields** cannot confirm a command.
+their reported controls. Progress (5.6) is display telemetry only: it triggers no
+read, it is not ownership evidence, and a stored sample does not confirm a command.
+The Home 150 qualification does not measure its emission interval.
+Missing, duplicate or malformed **fields** cannot confirm a command.
 Unknown events remain visible, and stream gaps invalidate continuity.
 
 The service's twelve-second confirmation and transition limits are application

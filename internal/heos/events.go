@@ -1,6 +1,7 @@
 package heos
 
 import (
+	"math"
 	"net/url"
 	"strconv"
 )
@@ -31,17 +32,20 @@ const (
 // confirmation. Empty state/repeat and Has* distinguish absence from zero/off.
 // Free-form account and playback-error text stays outside this projection.
 type EventData struct {
-	Kind       EventKind
-	Player     ID
-	State      string
-	Volume     int
-	Muted      bool
-	Repeat     string
-	Shuffle    bool
-	HasVolume  bool
-	HasMute    bool
-	HasShuffle bool
-	Valid      bool
+	Kind        EventKind
+	Player      ID
+	State       string
+	Volume      int
+	Muted       bool
+	Repeat      string
+	Shuffle     bool
+	HasVolume   bool
+	HasMute     bool
+	HasShuffle  bool
+	HasProgress bool
+	Position    int64
+	Duration    int64
+	Valid       bool
 }
 
 // Decode freezes the parsed fields before one event reaches multiple consumers.
@@ -94,6 +98,11 @@ func decodeEventData(command string, params url.Values) EventData {
 		position, posErr := strconv.ParseUint(one("cur_pos"), 10, 64)
 		duration, durErr := strconv.ParseUint(one("duration"), 10, 64)
 		d.Valid = d.Player != "" && posErr == nil && durErr == nil && (duration == 0 || position <= duration)
+		// A value outside int64 stays valid so it cannot invalidate control state,
+		// and HasProgress stays false so it is not shown.
+		if d.Valid && position <= math.MaxInt64 && duration <= math.MaxInt64 {
+			d.Position, d.Duration, d.HasProgress = int64(position), int64(duration), true
+		}
 	case EventPlaybackError:
 		d.Valid = d.Player != "" && one("error") != ""
 	case EventVolume, EventGroupVolume:

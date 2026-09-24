@@ -85,7 +85,7 @@ command; duplicate notifications with the currently confirmed values are benign.
 | --- | --- |
 | Initial admission or preflight | Forced full observation |
 | Contiguous state, volume/mute, repeat or shuffle event | Update the observed projection; no GET |
-| Valid playback progress | No GET and no renewal of state age |
+| Valid playback progress | No GET and no renewal of state age. The last in-range sample may be stored for display and is omitted from player revision |
 | Now-playing notification | Coalesced metadata read against the retained complete queue |
 | Queue/group/global changes, malformed events or gaps | Invalidate state; full observation is required |
 | Normal active volume step or hold | Confirmed event-maintained state; no full read before or after the setter |
@@ -102,11 +102,14 @@ a process/player/source-scoped opaque media ID. Stop, unknown and disconnected
 state return null; connected Play/Pause may retain stale metadata during
 verification. Presentation-only media freshness prevents a later Play event
 from making pre-Stop metadata fresh without a native media read. These flags do
-not participate in ownership, write guards or refresh scheduling. The projection
-is part of player revision, so the existing 500 ms in-memory revision watcher
-also emits `player_changed` for metadata updates. SSE remains identifier-only
-and coalesced; the API does not reconstruct an atomic queue snapshot or track
-history from these notifications.
+not participate in ownership, write guards or refresh scheduling. The projection,
+except for progress, is part of player revision. The existing 500 ms in-memory
+revision watcher also emits `player_changed` for metadata updates. A valid progress
+sample updates the display playhead without a read, a refresh wake, or a new
+revision, so that watcher stays quiet for progress-only changes. Clients poll the
+cached player for a moving display. SSE remains identifier-only and coalesced;
+the API does not reconstruct an atomic queue snapshot or track history from these
+notifications.
 
 Scalar writes register expectations before sending. Confirmation requires both a
 successful reply and complete matching events for the changed fields, in either

@@ -73,7 +73,20 @@ detail ETag. A metadata change can therefore invalidate `If-Match` for a new
 mutation; accepted retries keep their original key and input. Revision is an
 opaque equality token, not a track identifier or a numeric sequence.
 `Player.observed_at` remains the last full-observation time; targeted metadata
-updates do not renew it. There is no separate media timestamp or progress value.
+updates do not renew it.
+
+`now_playing.progress` is an optional last sample of the playhead:
+`position_ms`, optional `duration_ms`, and `sampled_at`. Units are milliseconds.
+`duration_ms` is absent when the device does not know the duration. The object
+is present for fresh Play or Pause after a sample bound to that media. It is
+absent while media is stale or unverified, and whenever `now_playing` is null.
+A full observation or a change of media identity clears progress. Delayed samples
+received before that boundary are discarded.
+The service does not interpolate between samples and does not provide seek.
+Playhead samples are outside player `revision` and the detail ETag, so
+`If-Match` and `player_changed` stay tied to control and media changes. To move
+a progress display, poll the player about once per second. The poll does not
+cause a device read. An unchanged `sampled_at` means no newer sample has arrived.
 
 Current media comes from the native now-playing read, without inferring queue
 position. Firmware can briefly report mixed media/queue identifiers, so even
