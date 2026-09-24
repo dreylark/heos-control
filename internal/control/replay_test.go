@@ -50,7 +50,7 @@ func TestReplayCheckerRejectsWrongOutcomeAndBudgets(t *testing.T) {
 			case "outcome":
 				broken.Operation.State = journal.Accepted
 			case "writes":
-				broken.Writes = append(slices.Clone(r.Writes), replayWrite{Mutation: heos.Mutation{Kind: "queue"}})
+				broken.Writes = append(slices.Clone(r.Writes), replayWrite{Mutation: heos.Mutation{Kind: heos.MutationKindQueue}})
 			case "reads":
 				broken.FullReads = f.Expect.MaxFullReads + 1
 			case "unconsumed":
@@ -109,7 +109,7 @@ func TestReplayRejectsEarlyFadeAndStop(t *testing.T) {
 				broken := r
 				broken.Writes = slices.Clone(r.Writes)
 				for i, w := range broken.Writes {
-					if kind == "fade" && w.Mutation.Kind == "volume" && w.Mutation.Level == 9 || kind == "stop" && w.Mutation.Kind == "transport" && w.Mutation.State == "stop" {
+					if kind == "fade" && w.Mutation.Kind == heos.MutationKindVolume && w.Mutation.Level == 9 || kind == "stop" && w.Mutation.Kind == heos.MutationKindTransport && w.Mutation.State == heos.PlayStateStop {
 						broken.Writes[i].At = time.Second
 					}
 				}
@@ -129,7 +129,7 @@ func runReplayFixture(t *testing.T, f replayFixture) replayResult {
 	clock := &modeEventClock{now: time.Now()}
 	c.clock = clock
 	base.tracks = replaySelectedQueue()
-	base.s.State, base.s.Repeat, base.s.Shuffle = f.Initial.State, f.Initial.Repeat, f.Initial.Shuffle
+	base.s.State, base.s.Repeat, base.s.Shuffle = heos.PlayState(f.Initial.State), heos.Repeat(f.Initial.Repeat), f.Initial.Shuffle
 	volume, muted := f.Initial.Volume, f.Initial.Muted
 	base.s.Volume, base.s.Muted, base.s.ObservedAt = &volume, &muted, clock.Now()
 	applyReplayPatch(&base.s, replayPatch{Queue: "old", Media: &replayMedia{MID: "previous-track", QID: "1", Source: "1024"}})
@@ -188,19 +188,19 @@ func checkReplayResult(f replayFixture, r replayResult) error {
 	queues := 0
 	for _, w := range r.Writes {
 		name, args := replayMutationRequest(w.Mutation)
-		if name == "" || args["pid"] != "1" || w.Mutation.Kind == "queue" && (args["sid"] != "900" || args["cid"] != "green") {
+		if name == "" || args["pid"] != "1" || w.Mutation.Kind == heos.MutationKindQueue && (args["sid"] != "900" || args["cid"] != "green") {
 			return fmt.Errorf("%s: unexpected mutation or identity: %+v", f.Name, w.Mutation)
 		}
-		if w.Mutation.Kind == "volume" {
+		if w.Mutation.Kind == heos.MutationKindVolume {
 			if len(f.Expect.VolumeAtMS) > 0 && (len(levels) >= len(f.Expect.VolumeAtMS) || w.At != time.Duration(f.Expect.VolumeAtMS[len(levels)])*time.Millisecond) {
 				return fmt.Errorf("%s: volume %d written at %s outside its envelope", f.Name, w.Mutation.Level, w.At)
 			}
 			levels = append(levels, w.Mutation.Level)
 		}
-		if w.Mutation.Kind == "transport" && w.Mutation.State == "stop" && f.Expect.StopAtMS != nil && w.At != time.Duration(*f.Expect.StopAtMS)*time.Millisecond {
+		if w.Mutation.Kind == heos.MutationKindTransport && w.Mutation.State == heos.PlayStateStop && f.Expect.StopAtMS != nil && w.At != time.Duration(*f.Expect.StopAtMS)*time.Millisecond {
 			return fmt.Errorf("%s: Stop written at %s want %dms", f.Name, w.At, *f.Expect.StopAtMS)
 		}
-		if w.Mutation.Kind == "queue" {
+		if w.Mutation.Kind == heos.MutationKindQueue {
 			queues++
 		}
 		for _, window := range f.Expect.NoWrites {
@@ -224,7 +224,7 @@ func checkReplayResult(f replayFixture, r replayResult) error {
 			return fmt.Errorf("%s: successful run sent no commands", f.Name)
 		}
 		last := r.Writes[len(r.Writes)-1].Mutation
-		if last.Kind != "transport" || last.State != "stop" {
+		if last.Kind != heos.MutationKindTransport || last.State != heos.PlayStateStop {
 			return fmt.Errorf("%s: successful run did not end with Stop", f.Name)
 		}
 	}
@@ -247,7 +247,7 @@ func (d *replayDevice) Refresh(ctx context.Context) error {
 	d.fullReads++
 	return d.albumDevice.Refresh(ctx)
 }
-func (d *replayDevice) RefreshScalars(ctx context.Context, _ string) error {
+func (d *replayDevice) RefreshScalars(ctx context.Context, _ heos.MutationKind) error {
 	d.scalarReads++
 	return context.Cause(ctx)
 }

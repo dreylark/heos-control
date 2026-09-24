@@ -17,11 +17,11 @@ func queuePolicyFixture() (queuePolicyState, queueObservationFacts) {
 	volume, muted, total := 20, false, 2
 	first := heos.Media{Source: "1024", ID: "first", QueueID: "1"}
 	second := heos.Media{Source: "1024", ID: "second", QueueID: "2"}
-	before := heos.Snapshot{State: "play", Volume: &volume, Muted: &muted, Repeat: "off", Shuffle: true,
+	before := heos.Snapshot{State: heos.PlayStatePlay, Volume: &volume, Muted: &muted, Repeat: heos.RepeatOff, Shuffle: true,
 		Media: &first, Queue: heos.QueuePage{Items: []heos.Media{first, second}, Total: &total}}
 	after := before
 	after.Media = &second
-	return queuePolicyState{Owned: true, Automating: true, ExpectedState: "play", PlaybackUntil: now.Add(20 * time.Minute)},
+	return queuePolicyState{Owned: true, Automating: true, ExpectedState: heos.PlayStatePlay, PlaybackUntil: now.Add(20 * time.Minute)},
 		queueObservationFacts{Now: now, Before: before, Observed: after}
 }
 
@@ -78,16 +78,16 @@ func TestQueueObservationDecisionTable(t *testing.T) {
 	}{
 		{"not-owned", func(s *queuePolicyState, _ *queueObservationFacts) { s.Owned = false }, queuePass, "outside_active_queue", nil},
 		{"not-automating", func(s *queuePolicyState, _ *queueObservationFacts) { s.Automating = false }, queuePass, "outside_active_queue", nil},
-		{"expected-not-play", func(s *queuePolicyState, _ *queueObservationFacts) { s.ExpectedState = "stop" }, queuePass, "outside_active_queue", nil},
+		{"expected-not-play", func(s *queuePolicyState, _ *queueObservationFacts) { s.ExpectedState = heos.PlayStateStop }, queuePass, "outside_active_queue", nil},
 		{"already-settled", func(s *queuePolicyState, _ *queueObservationFacts) { s.WaitUntil = time.Time{} }, queuePass, "no_transition", nil},
 		{"confirmed", func(_ *queuePolicyState, _ *queueObservationFacts) {}, queueResume, "play_confirmed", nil},
 		{"new-stop", func(s *queuePolicyState, f *queueObservationFacts) {
 			s.WaitUntil = time.Time{}
-			f.Observed.State = "stop"
+			f.Observed.State = heos.PlayStateStop
 		}, queueWait, "transport_pending", nil},
-		{"unknown", func(_ *queuePolicyState, f *queueObservationFacts) { f.Observed.State = "unknown" }, queueWait, "transport_pending", nil},
+		{"unknown", func(_ *queuePolicyState, f *queueObservationFacts) { f.Observed.State = heos.PlayStateUnknown }, queueWait, "transport_pending", nil},
 		{"stop-transitional-qid", func(_ *queuePolicyState, f *queueObservationFacts) {
-			f.Observed.State = "stop"
+			f.Observed.State = heos.PlayStateStop
 			f.Observed.Media.QueueID = "transitional"
 		}, queueWait, "transport_pending", nil},
 		{"hybrid", func(s *queuePolicyState, f *queueObservationFacts) {
@@ -102,17 +102,17 @@ func TestQueueObservationDecisionTable(t *testing.T) {
 		{"timeout-before-all-faults", func(_ *queuePolicyState, f *queueObservationFacts) {
 			f.Expired, f.PendingEvents = true, true
 			f.Cancellation, f.Unsafe = context.Canceled, heos.ErrStale
-			f.Observed.State = "pause"
+			f.Observed.State = heos.PlayStatePause
 		}, queueRelease, "transition_timeout", errQueueTransitionTimeout},
 		{"cancel-before-confirmation", func(_ *queuePolicyState, f *queueObservationFacts) { f.Cancellation = context.Canceled }, queueRelease, "operation_cancelled", context.Canceled},
 		{"cancel-before-unsafe-and-intervention", func(_ *queuePolicyState, f *queueObservationFacts) {
 			f.Cancellation, f.Unsafe = context.Canceled, heos.ErrStale
-			f.Observed.State = "pause"
+			f.Observed.State = heos.PlayStatePause
 		}, queueRelease, "operation_cancelled", context.Canceled},
 		{"unsafe-before-confirmation", func(_ *queuePolicyState, f *queueObservationFacts) { f.Unsafe = heos.ErrStale }, queueRelease, "observation_unsafe", heos.ErrStale},
 		{"unsafe-before-intervention", func(_ *queuePolicyState, f *queueObservationFacts) {
 			f.Unsafe = heos.ErrStale
-			f.Observed.State = "pause"
+			f.Observed.State = heos.PlayStatePause
 		}, queueRelease, "observation_unsafe", heos.ErrStale},
 		{"intervention-before-wait", func(_ *queuePolicyState, f *queueObservationFacts) {
 			v := 21
@@ -121,9 +121,9 @@ func TestQueueObservationDecisionTable(t *testing.T) {
 		}, queueRelease, "queue_controls_changed", ErrOwnership},
 		{"intervention-before-new-event", func(_ *queuePolicyState, f *queueObservationFacts) {
 			f.PendingEvents = true
-			f.Observed.State = "pause"
+			f.Observed.State = heos.PlayStatePause
 		}, queueRelease, "queue_controls_changed", ErrOwnership},
-		{"pause", func(_ *queuePolicyState, f *queueObservationFacts) { f.Observed.State = "pause" }, queueRelease, "queue_controls_changed", ErrOwnership},
+		{"pause", func(_ *queuePolicyState, f *queueObservationFacts) { f.Observed.State = heos.PlayStatePause }, queueRelease, "queue_controls_changed", ErrOwnership},
 		{"foreign-mid", func(_ *queuePolicyState, f *queueObservationFacts) { f.Observed.Media.ID = "foreign" }, queueRelease, "queue_controls_changed", ErrOwnership},
 		{"foreign-qid", func(_ *queuePolicyState, f *queueObservationFacts) { f.Observed.Media.QueueID = "foreign" }, queueRelease, "queue_controls_changed", ErrOwnership},
 		{"foreign-source", func(_ *queuePolicyState, f *queueObservationFacts) { f.Observed.Media.Source = "foreign" }, queueRelease, "queue_controls_changed", ErrOwnership},
@@ -161,7 +161,7 @@ func TestQueueObservationDecisionTable(t *testing.T) {
 func TestQueueEventUnexpectedPlayStillRequiresOrdinaryAttribution(t *testing.T) {
 	for _, waiting := range []bool{false, true} {
 		s, f := queuePolicyFixture()
-		s.ExpectedState = "stop"
+		s.ExpectedState = heos.PlayStateStop
 		if waiting {
 			s.WaitUntil = f.Now.Add(3 * time.Second)
 		}

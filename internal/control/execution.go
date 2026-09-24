@@ -74,16 +74,16 @@ func (c *Coordinator) writeOnce(l *lane, r *execution, m heos.Mutation) (err err
 	if e != nil {
 		return e
 	}
-	if waited && m.Kind == "volume" {
+	if waited && m.Kind == heos.MutationKindVolume {
 		return errPlaybackTimelineChanged
 	}
-	if r.automating && m.Kind == "volume" && m.Level > 0 && !c.clock.Now().Before(r.playbackDeadline) {
+	if r.automating && m.Kind == heos.MutationKindVolume && m.Level > 0 && !c.clock.Now().Before(r.playbackDeadline) {
 		return errPlaybackTimelineChanged
 	}
-	if e := mutationSafety(l, fresh, m.Kind); e != nil {
+	if e := mutationSafety(l, fresh, m.Kind == heos.MutationKindSkip); e != nil {
 		return e
 	}
-	if m.Kind == "skip" {
+	if m.Kind == heos.MutationKindSkip {
 		before, fresh, e = c.prepareSkip(r.ctx, l, m.Direction, before, fresh)
 		if e != nil {
 			return e
@@ -100,14 +100,14 @@ func (c *Coordinator) writeOnce(l *lane, r *execution, m heos.Mutation) (err err
 	if !same {
 		return ownershipMismatch("before_write_changed", changes, before, fresh)
 	}
-	if e := c.transition(r.ctx, r, journal.Update{State: journal.Running, Phase: "sending_" + m.Kind}); e != nil {
+	if e := c.transition(r.ctx, r, journal.Update{State: journal.Running, Phase: "sending_" + string(m.Kind)}); e != nil {
 		r.mu.Lock()
 		r.uncertain = true
 		r.mu.Unlock()
 		return fmt.Errorf("journal unavailable: %w", e)
 	}
 	guardDuration := 5 * time.Second
-	if r.automating && m.Kind == "volume" && m.Level > 0 {
+	if r.automating && m.Kind == heos.MutationKindVolume && m.Level > 0 {
 		remaining := r.playbackDeadline.Sub(c.clock.Now())
 		if remaining <= 0 {
 			return errPlaybackTimelineChanged
@@ -121,7 +121,7 @@ func (c *Coordinator) writeOnce(l *lane, r *execution, m heos.Mutation) (err err
 	m.Player = fresh.Player.ID
 	began := c.clock.Now()
 	response, writeErr := l.writer.Write(r.ctx, m, heos.Guard{Token: fresh.Token, ExpiresAt: time.Now().Add(guardDuration)})
-	defer func() { c.recordConfirmation(l, r, m.Kind, began, writeErr, err) }()
+	defer func() { c.recordConfirmation(l, r, string(m.Kind), began, writeErr, err) }()
 	e = writeErr
 	r.mu.Lock()
 	r.inflight = false
@@ -153,36 +153,36 @@ func (c *Coordinator) writeOnce(l *lane, r *execution, m heos.Mutation) (err err
 	}
 	expected := fresh
 	switch m.Kind {
-	case "mode":
+	case heos.MutationKindMode:
 		expected.Repeat = m.Repeat
 		expected.Shuffle = m.Shuffle
-	case "volume":
+	case heos.MutationKindVolume:
 		v := m.Level
 		expected.Volume = &v
 		if fresh.Muted != nil && *fresh.Muted {
 			expected.Muted = after.Muted // Setting volume may clear an existing mute.
 		}
-	case "mute":
+	case heos.MutationKindMute:
 		v := m.Muted
 		expected.Muted = &v
-	case "transport":
+	case heos.MutationKindTransport:
 		expected.State = m.State
 		expected = transportMediaReadback(expected, after, m.State, false)
-	case "skip":
+	case heos.MutationKindSkip:
 		if !skipConfirmed(fresh, after) {
 			return ownershipMismatch("readback_changed", stateChanges(fresh, after), fresh, after)
 		}
 		expected.State = after.State
 		expected.Media = after.Media
-	case "queue":
-		expected.State = "play"
+	case heos.MutationKindQueue:
+		expected.State = heos.PlayStatePlay
 		expected.Media = after.Media
 		expected.Queue = after.Queue
 		if !r.queueResultMatches(after) {
 			return ownershipMismatch(r.queueResultProblem(after), []string{"queue_membership"}, fresh, after)
 		}
 	}
-	if m.Kind == "volume" {
+	if m.Kind == heos.MutationKindVolume {
 		after, _, e = c.awaitOwnedPlayback(l, r, expected, after)
 		if e != nil {
 			return e
@@ -202,7 +202,7 @@ func (c *Coordinator) writeOnce(l *lane, r *execution, m heos.Mutation) (err err
 		after.Token = r.expected.Token
 	}
 	r.expected = after
-	if m.Kind == "queue" && r.bounded {
+	if m.Kind == heos.MutationKindQueue && r.bounded {
 		r.queueOwned = true
 	}
 	r.unconfirmed = false
@@ -227,21 +227,21 @@ func (c *Coordinator) execute(l *lane, r *execution, cmd Command, item heos.Item
 	write := func(m heos.Mutation) error { return c.write(l, r, m) }
 	var e error
 	switch cmd.Kind {
-	case "volume":
-		e = write(heos.Mutation{Kind: "volume", Level: cmd.Level})
-	case "mute":
-		e = write(heos.Mutation{Kind: "mute", Muted: cmd.Muted})
-	case "transport":
-		e = write(heos.Mutation{Kind: "transport", State: cmd.State})
-	case "skip":
-		e = write(heos.Mutation{Kind: "skip", Direction: cmd.Direction})
-	case "playback":
+	case CommandKindVolume:
+		e = write(heos.Mutation{Kind: heos.MutationKindVolume, Level: cmd.Level})
+	case CommandKindMute:
+		e = write(heos.Mutation{Kind: heos.MutationKindMute, Muted: cmd.Muted})
+	case CommandKindTransport:
+		e = write(heos.Mutation{Kind: heos.MutationKindTransport, State: cmd.State})
+	case CommandKindSkip:
+		e = write(heos.Mutation{Kind: heos.MutationKindSkip, Direction: cmd.Direction})
+	case CommandKindPlayback:
 		e = c.startPlayback(l, r, cmd, item)
 		if e == nil && cmd.Automation != nil {
 			e = c.automate(l, r, *cmd.Automation)
 		}
-	case "stop", "cancel":
-		if cmd.Kind == "cancel" && cmd.Mode == "release" {
+	case CommandKindStop, CommandKindCancel:
+		if cmd.Kind == CommandKindCancel && cmd.Mode == "release" {
 			break
 		}
 		r.mu.Lock()
@@ -253,7 +253,7 @@ func (c *Coordinator) execute(l *lane, r *execution, cmd Command, item heos.Item
 			elapsed := c.clock.Now().Sub(began)
 			level := max(0, start-int(elapsed*time.Duration(start)/(time.Duration(cmd.FadeSeconds)*time.Second)))
 			if level < last {
-				e = write(heos.Mutation{Kind: "volume", Level: level})
+				e = write(heos.Mutation{Kind: heos.MutationKindVolume, Level: level})
 				if e != nil {
 					break
 				}
@@ -267,13 +267,13 @@ func (c *Coordinator) execute(l *lane, r *execution, cmd Command, item heos.Item
 			}
 		}
 		if e == nil {
-			e = write(heos.Mutation{Kind: "transport", State: "stop"})
+			e = write(heos.Mutation{Kind: heos.MutationKindTransport, State: heos.PlayStateStop})
 		}
 	default:
 		e = heos.ErrBounds
 	}
 	if errors.Is(context.Cause(r.ctx), errSuperseded) {
-		if cmd.Kind == "cancel" {
+		if cmd.Kind == CommandKindCancel {
 			c.finishOrphan(cmd.Target, r.targetMetrics)
 		}
 		return
@@ -305,7 +305,7 @@ func (c *Coordinator) execute(l *lane, r *execution, cmd Command, item heos.Item
 		}
 	}
 	r.mu.Lock()
-	mayContinue := r.expected.State != "stop" || state != journal.Succeeded
+	mayContinue := r.expected.State != heos.PlayStateStop || state != journal.Succeeded
 	confirmed := r.confirmed
 	r.mu.Unlock()
 	final := journal.Update{State: state, Phase: "complete", ErrorCode: code, Outcome: json.RawMessage(fmt.Sprintf(`{"delivery":%q,"playback_may_continue":%t,"commands_confirmed":%d}`, outcome, mayContinue, confirmed))}
@@ -321,7 +321,7 @@ func (c *Coordinator) execute(l *lane, r *execution, cmd Command, item heos.Item
 	}
 	// Device work is finished; only target/worker journal reconciliation remains.
 	r.metrics.phase("persisting")
-	if cmd.Kind == "cancel" {
+	if cmd.Kind == CommandKindCancel {
 		targetState := journal.Cancelled
 		if state != journal.Succeeded {
 			targetState = state
@@ -334,7 +334,7 @@ func (c *Coordinator) execute(l *lane, r *execution, cmd Command, item heos.Item
 	// Keep only journal reconciliation pending during an outage. No playback replay.
 	for {
 		if errors.Is(context.Cause(r.ctx), errSuperseded) {
-			if cmd.Kind == "cancel" {
+			if cmd.Kind == CommandKindCancel {
 				c.finishOrphan(cmd.Target, r.targetMetrics)
 			}
 			return

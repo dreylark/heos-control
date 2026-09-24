@@ -65,9 +65,9 @@ func TestPlayerNowPlayingProjection(t *testing.T) {
 		stale  bool
 	}{
 		{name: "playing"},
-		{name: "paused", change: func(s *heos.Snapshot) { s.State = "pause" }},
-		{name: "stopped", change: func(s *heos.Snapshot) { s.State = "stop" }, null: true},
-		{name: "unknown", change: func(s *heos.Snapshot) { s.State = "unknown" }, null: true},
+		{name: "paused", change: func(s *heos.Snapshot) { s.State = heos.PlayStatePause }},
+		{name: "stopped", change: func(s *heos.Snapshot) { s.State = heos.PlayStateStop }, null: true},
+		{name: "unknown", change: func(s *heos.Snapshot) { s.State = heos.PlayStateUnknown }, null: true},
 		{name: "offline", change: func(s *heos.Snapshot) { s.Connected = false; s.Stale = true }, null: true},
 		{name: "unobserved", change: func(s *heos.Snapshot) { s.ObservedAt = time.Time{} }, null: true},
 		{name: "no media", change: func(s *heos.Snapshot) { s.Media = nil }, null: true},
@@ -124,7 +124,7 @@ func TestPlayerNowPlayingRevisionIncludesMedia(t *testing.T) {
 		{"native media ID", func(s *heos.Snapshot) { s.Media.ID = "different" }},
 		{"source ID", func(s *heos.Snapshot) { s.Media.Source = "different" }},
 		{"absent", func(s *heos.Snapshot) { s.Media = nil }},
-		{"stop", func(s *heos.Snapshot) { s.State = "stop" }},
+		{"stop", func(s *heos.Snapshot) { s.State = heos.PlayStateStop }},
 		{"media pending", func(s *heos.Snapshot) { s.MediaStale = true }},
 		{"media unavailable", func(s *heos.Snapshot) { s.MediaUnavailable = true }},
 	} {
@@ -223,7 +223,7 @@ func TestPlayerPlayheadIsLastSampleAndOutsideRevision(t *testing.T) {
 	if _, ok := media["progress"]; ok {
 		t.Fatalf("sample bound to other media was projected: %v", media)
 	}
-	observation.value.State = "stop"
+	observation.value.State = heos.PlayStateStop
 	if _, media = playerMediaJSON(t, reads, "room"); media != nil {
 		t.Fatalf("stop kept now_playing: %v", media)
 	}
@@ -239,12 +239,12 @@ func TestMediaChangeFencesNewAdmissionButNotAcceptedRetry(t *testing.T) {
 	device.mu.Lock()
 	device.s.Media = &heos.Media{Source: "900", ID: "track-B", Song: "Track B"}
 	device.mu.Unlock()
-	if _, err := c.Submit(context.Background(), request, Command{Kind: "volume", Level: 10}); !errors.Is(err, ErrPrecondition) {
+	if _, err := c.Submit(context.Background(), request, Command{Kind: CommandKindVolume, Level: 10}); !errors.Is(err, ErrPrecondition) {
 		t.Fatalf("new request using pre-media-change revision: %v", err)
 	}
 	after, _ := c.reads.Player("room")
 	request.IfMatch = fmt.Sprintf("%q", after.Revision)
-	accepted, err := c.Submit(context.Background(), request, Command{Kind: "volume", Level: 10})
+	accepted, err := c.Submit(context.Background(), request, Command{Kind: CommandKindVolume, Level: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,7 +254,7 @@ func TestMediaChangeFencesNewAdmissionButNotAcceptedRetry(t *testing.T) {
 	device.mu.Lock()
 	device.s.Media = &heos.Media{Source: "900", ID: "track-C", Song: "Track C"}
 	device.mu.Unlock()
-	retry, err := c.Submit(context.Background(), request, Command{Kind: "volume", Level: 10})
+	retry, err := c.Submit(context.Background(), request, Command{Kind: CommandKindVolume, Level: 10})
 	if err != nil || retry.ID != accepted.ID {
 		t.Fatalf("original accepted retry changed after media update: %+v %v", retry, err)
 	}

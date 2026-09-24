@@ -80,7 +80,7 @@ func TestRejectedSetterRecoversObservationWithoutReplay(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			c, db, base, req := fixtureCoordinator(t)
 			d := installRejectionRecoveryDevice(c, base, tc.err)
-			a, err := c.Submit(context.Background(), req, Command{Kind: "volume", Level: 10})
+			a, err := c.Submit(context.Background(), req, Command{Kind: CommandKindVolume, Level: 10})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -122,7 +122,7 @@ func TestRejectedSetterRecoveryHonorsCancellationAndKeepsEvidence(t *testing.T) 
 				<-ctx.Done()
 				return ctx.Err()
 			}
-			a, err := c.Submit(context.Background(), req, Command{Kind: "volume", Level: 10})
+			a, err := c.Submit(context.Background(), req, Command{Kind: CommandKindVolume, Level: 10})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -178,10 +178,10 @@ func TestRejectedReadDoesNotAddWriteRecovery(t *testing.T) {
 			if phase == "prewrite" {
 				d.onRead = func() error { return readErr }
 			} else {
-				d.onScalarRead = func(string) error { return readErr }
+				d.onScalarRead = func(heos.MutationKind) error { return readErr }
 				wantWrites, wantFallback, wantElapsed, wantState = 1, 1, 11*time.Second, journal.Uncertain
 			}
-			c.execute(c.lanes["room"], r, Command{Kind: "volume", Level: 21}, heos.Item{})
+			c.execute(c.lanes["room"], r, Command{Kind: CommandKindVolume, Level: 21}, heos.Item{})
 			if len(d.reads) != 1 || len(d.scalarReads) != wantFallback || len(d.writes) != wantWrites || clock.Now().Sub(began) != wantElapsed {
 				t.Fatalf("rejected read changed IO budget: full=%d scalar=%d writes=%d elapsed=%s; want 1/%d/%d/%s",
 					len(d.reads), len(d.scalarReads), len(d.writes), clock.Now().Sub(began), wantFallback, wantWrites, wantElapsed)

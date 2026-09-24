@@ -30,7 +30,7 @@ func TestSkipTLSConfirmsNativeNavigationWithoutReplay(t *testing.T) {
 		for _, hybrid := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/hybrid=%t", direction, hybrid), func(t *testing.T) {
 				c, db, device, req := skipWireFixture(t, direction, hybrid)
-				cmd := Command{Kind: "skip", Direction: direction}
+				cmd := Command{Kind: CommandKindSkip, Direction: direction}
 				admission, err := c.Submit(context.Background(), req, cmd)
 				if err != nil {
 					t.Fatal(err)
@@ -78,7 +78,7 @@ func TestSkipTLSRejectionLeavesDirectControlsAdmissible(t *testing.T) {
 				})
 				l := c.lanes["room"]
 				before := l.device.Observer.Snapshot()
-				cmd := Command{Kind: "skip", Direction: direction}
+				cmd := Command{Kind: CommandKindSkip, Direction: direction}
 				admission, err := c.Submit(context.Background(), req, cmd)
 				if err != nil {
 					t.Fatal(err)
@@ -100,7 +100,7 @@ func TestSkipTLSRejectionLeavesDirectControlsAdmissible(t *testing.T) {
 					t.Fatalf("rejection recovery performed %d full observations, want 3", fullReads)
 				}
 				next := playerRequest(c, req, "after-rejected-skip", "PUT", "/v1/players/room/"+kind)
-				admission, err = c.Submit(context.Background(), next, Command{Kind: kind, Level: 10, State: "stop"})
+				admission, err = c.Submit(context.Background(), next, Command{Kind: CommandKind(kind), Level: 10, State: heos.PlayStateStop})
 				if err != nil {
 					t.Fatalf("%s after native eid 17 must remain admissible: %v", kind, err)
 				}
@@ -132,7 +132,7 @@ func TestSkipTLSRejectedRecoveryFailureKeepsStateUnavailable(t *testing.T) {
 				// cannot establish a new baseline after the rejected command.
 				d.fixture.Scripts = append(d.fixture.Scripts, replayScript{On: "player/get_players", Occurrence: 3, Steps: []replayStep{step}})
 			})
-			admission, err := c.Submit(context.Background(), req, Command{Kind: "skip", Direction: "next"})
+			admission, err := c.Submit(context.Background(), req, Command{Kind: CommandKindSkip, Direction: "next"})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -141,7 +141,7 @@ func TestSkipTLSRejectedRecoveryFailureKeepsStateUnavailable(t *testing.T) {
 				t.Fatalf("failed recovery fabricated usable state: %+v", snapshot)
 			}
 			next := playerRequest(c, req, "after-failed-recovery", "PUT", "/v1/players/room/volume")
-			if _, err := c.Submit(context.Background(), next, Command{Kind: "volume", Level: 10}); !errors.Is(err, ErrUnavailable) {
+			if _, err := c.Submit(context.Background(), next, Command{Kind: CommandKindVolume, Level: 10}); !errors.Is(err, ErrUnavailable) {
 				t.Fatalf("failed recovery must refuse later writes: %v", err)
 			}
 			c.Close()
@@ -193,7 +193,7 @@ func skipWireFixture(t *testing.T, direction string, hybrid bool, configure ...f
 	clock := &tlsReplayClock{now: time.Now(), delivery: newWireEventDelivery()}
 	volume, muted := 20, false
 	device := &tlsReplayDevice{clock: clock, ctx: ctx, cancel: cancel, occurrence: map[string]int{},
-		state: heos.Snapshot{State: "play", Volume: &volume, Muted: &muted, Repeat: "off"}}
+		state: heos.Snapshot{State: heos.PlayStatePlay, Volume: &volume, Muted: &muted, Repeat: heos.RepeatOff}}
 	from, target := 1, 2
 	if direction == "previous" {
 		from, target, device.state.State = 2, 1, "pause"

@@ -20,7 +20,7 @@ func TestOwnershipEventLogsFirstCauseAtInfo(t *testing.T) {
 	var output bytes.Buffer
 	c.logger = slog.New(slog.NewJSONHandler(&output, nil))
 	d.before = func(m heos.Mutation) {
-		if m.Kind == "queue" {
+		if m.Kind == heos.MutationKindQueue {
 			// Denon 5.4: pause while loading a stopped player is unexpected.
 			d.handler(heos.Event{Command: "event/player_state_changed", Params: url.Values{"pid": {"1"}, "state": {"pause"}, "text": {"private-marker"}}})
 			d.handler(heos.Event{Gap: true}) // A later disconnect must not replace the cause.
@@ -74,7 +74,7 @@ func TestPendingReadbackLogsChangedField(t *testing.T) {
 
 func TestOwnershipMismatchKeepsClassificationAndPrivateDataOut(t *testing.T) {
 	v, muted := 10, false
-	a := heos.Snapshot{State: "play", Volume: &v, Muted: &muted, Media: &heos.Media{Source: "1024", ID: "private-media", Song: "private-song"}}
+	a := heos.Snapshot{State: heos.PlayStatePlay, Volume: &v, Muted: &muted, Media: &heos.Media{Source: "1024", ID: "private-media", Song: "private-song"}}
 	b := a
 	v2 := 11
 	b.Volume = &v2

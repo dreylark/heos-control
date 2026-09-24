@@ -33,7 +33,7 @@ func fuzzProjectionSnapshot() Snapshot {
 	return Snapshot{
 		Key: "synthetic", Player: Player{ID: "-9007199254740993", Serial: "synthetic-serial", Model: "synthetic-model"},
 		Groups: []Group{{ID: "group", Players: []GroupMember{{ID: "other", Role: "leader"}}}},
-		State:  "stop", Volume: &volume, Muted: &muted, Repeat: "off", Shuffle: false,
+		State:  "stop", Volume: &volume, Muted: &muted, Repeat: RepeatOff, Shuffle: false,
 		Media: &media, Queue: QueuePage{Items: []Media{media}, Total: &total},
 		ObservedAt: time.Unix(1700000000, 0).UTC(), Token: Token{Generation: 3, Revision: 7, Catalog: 2, Player: 4, Write: 1},
 		Connected: true, Verified: true,
@@ -48,10 +48,10 @@ func makeFuzzProjectionCase(selector uint8) fuzzProjectionCase {
 	switch selector % 8 {
 	case 0:
 		c.command = "event/player_state_changed"
-		state := []string{"play", "pause", "stop", "unknown"}[(selector/8)%4]
-		add("state", state)
+		state := []PlayState{PlayStatePlay, PlayStatePause, PlayStateStop, PlayStateUnknown}[(selector/8)%4]
+		add("state", string(state))
 		c.want.State = state
-		c.want.MediaStale = state == "stop" || state == "unknown"
+		c.want.MediaStale = state == PlayStateStop || state == PlayStateUnknown
 	case 1:
 		c.command = "event/player_volume_changed"
 		level, mute := int(selector)%101, selector&16 != 0
@@ -64,8 +64,8 @@ func makeFuzzProjectionCase(selector uint8) fuzzProjectionCase {
 		c.want.Volume, c.want.Muted = &level, &mute
 	case 2:
 		c.command = "event/repeat_mode_changed"
-		repeat := []string{"off", "on_one", "on_all"}[(selector/8)%3]
-		add("repeat", repeat)
+		repeat := []Repeat{RepeatOff, RepeatOnOne, RepeatOnAll}[(selector/8)%3]
+		add("repeat", string(repeat))
 		c.want.Repeat = repeat
 	case 3:
 		c.command = "event/shuffle_mode_changed"

@@ -67,13 +67,18 @@ func copyScalar[T any](p *T) *T {
 	return &v
 }
 
+func protocolString[T ~string](v T) *string {
+	s := string(v)
+	return &s
+}
+
 func snapshotScalars(s heos.Snapshot) *journal.DiagnosticScalars {
 	v := &journal.DiagnosticScalars{Muted: copyScalar(s.Muted), Shuffle: copyScalar(&s.Shuffle), Grouped: copyScalar(&s.Grouped)}
-	if s.State == "play" || s.State == "pause" || s.State == "stop" || s.State == "unknown" {
-		v.State = copyScalar(&s.State)
+	if s.State.Known() {
+		v.State = protocolString(s.State)
 	}
-	if s.Repeat == "off" || s.Repeat == "on_all" || s.Repeat == "on_one" {
-		v.Repeat = copyScalar(&s.Repeat)
+	if s.Repeat.Known() {
+		v.Repeat = protocolString(s.Repeat)
 	}
 	if s.Volume != nil && *s.Volume >= 0 && *s.Volume <= 100 {
 		v.Volume = copyScalar(s.Volume)
@@ -88,8 +93,8 @@ func eventScalars(e heos.Event) (*journal.DiagnosticScalars, []string) {
 	fields := []string{}
 	switch data.Kind {
 	case heos.EventState:
-		if data.State != "" {
-			v.State = &data.State
+		if data.State != heos.PlayStateAbsent {
+			v.State = protocolString(data.State)
 			fields = append(fields, "state")
 		}
 	case heos.EventVolume:
@@ -102,8 +107,8 @@ func eventScalars(e heos.Event) (*journal.DiagnosticScalars, []string) {
 			fields = append(fields, "mute")
 		}
 	case heos.EventRepeat:
-		if data.Repeat != "" {
-			v.Repeat = &data.Repeat
+		if data.Repeat != heos.RepeatAbsent {
+			v.Repeat = protocolString(data.Repeat)
 			fields = append(fields, "repeat")
 		}
 	case heos.EventShuffle:

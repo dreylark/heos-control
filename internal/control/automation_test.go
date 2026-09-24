@@ -42,18 +42,18 @@ func automationFixture(t *testing.T) (*Coordinator, *memoryJournal, *fakeDevice,
 	c.reads.devices[0] = l.device
 	c.reads.sources = []config.Source{{Key: "music", Player: "room", Name: "Gerbera"}}
 	req.Method, req.Endpoint = "POST", "/v1/players/room/playback"
-	cmd := Command{Kind: "playback", Level: 10, ItemRef: "track-ref", Repeat: "off", Shuffle: true, Automation: &Automation{TargetLevel: 40, RampSeconds: 300, DurationSeconds: 1200, FadeSeconds: 30}}
+	cmd := Command{Kind: CommandKindPlayback, Level: 10, ItemRef: "track-ref", Repeat: heos.RepeatOff, Shuffle: true, Automation: &Automation{TargetLevel: 40, RampSeconds: 300, DurationSeconds: 1200, FadeSeconds: 30}}
 	req.Body, _ = json.Marshal(cmd)
 	return c, j, d, req, cmd
 }
 
 func TestAutomationFullWindowAndReplay(t *testing.T) {
-	for _, state := range []string{"stop", "pause"} {
-		t.Run(state, func(t *testing.T) { automationFullWindowAndReplay(t, state) })
+	for _, state := range []heos.PlayState{heos.PlayStateStop, heos.PlayStatePause} {
+		t.Run(string(state), func(t *testing.T) { automationFullWindowAndReplay(t, state) })
 	}
 }
 
-func automationFullWindowAndReplay(t *testing.T, state string) {
+func automationFullWindowAndReplay(t *testing.T, state heos.PlayState) {
 	t.Helper()
 	c, j, d, req, cmd := automationFixture(t)
 	d.s.State = state
@@ -63,7 +63,7 @@ func automationFullWindowAndReplay(t *testing.T, state string) {
 	c.clock = clock
 	// Preparation does not consume the playback window.
 	d.before = func(m heos.Mutation) {
-		if m.Kind == "queue" {
+		if m.Kind == heos.MutationKindQueue {
 			clock.mu.Lock()
 			clock.now = clock.now.Add(7 * time.Second)
 			clock.mu.Unlock()
@@ -78,7 +78,7 @@ func automationFullWindowAndReplay(t *testing.T, state string) {
 	original := d.before
 	d.before = func(m heos.Mutation) {
 		original(m)
-		if m.Kind == "volume" {
+		if m.Kind == heos.MutationKindVolume {
 			levels = append(levels, point{clock.Now().Sub(began), m.Level})
 		}
 	}
@@ -126,7 +126,7 @@ func automationFullWindowAndReplay(t *testing.T, state string) {
 	count := len(d.writes)
 	last := d.writes[count-1]
 	d.mu.Unlock()
-	if last.Kind != "transport" || last.State != "stop" {
+	if last.Kind != heos.MutationKindTransport || last.State != heos.PlayStateStop {
 		t.Fatal(last)
 	}
 	// Replay the exact original request, whose revision is now stale.
@@ -146,7 +146,7 @@ func TestVolumeEventsMatchPendingOrConfirmedState(t *testing.T) {
 			c, j, d, req, cmd := automationFixture(t)
 			c.clock = &advancingClock{now: time.Now()}
 			d.before = func(m heos.Mutation) {
-				if m.Kind == "mode" && strings.HasPrefix(scenario, "after-confirmation") {
+				if m.Kind == heos.MutationKindMode && strings.HasPrefix(scenario, "after-confirmation") {
 					// A delayed notification of the confirmed value is harmless;
 					// a different value after confirmation is intervention.
 					level := "10"
@@ -155,7 +155,7 @@ func TestVolumeEventsMatchPendingOrConfirmedState(t *testing.T) {
 					}
 					d.handler(heos.Event{Command: "event/player_volume_changed", Params: url.Values{"pid": {"1"}, "level": {level}, "mute": {"off"}}})
 				}
-				if m.Kind != "volume" {
+				if m.Kind != heos.MutationKindVolume {
 					return
 				}
 				params := url.Values{"pid": {"1"}, "level": {fmt.Sprint(m.Level)}, "mute": {"off"}}
@@ -215,9 +215,9 @@ func TestAutomationRejectsInvalidAndBusyBeforeWrites(t *testing.T) {
 			case "ceiling":
 				cmd.Automation.TargetLevel = 41
 			case "repeat":
-				cmd.Repeat = "on_all"
+				cmd.Repeat = heos.RepeatOnAll
 			case "playing":
-				d.s.State = "play"
+				d.s.State = heos.PlayStatePlay
 				p, _ := c.reads.Player("room")
 				req.IfMatch = fmt.Sprintf("%q", p.Revision)
 				want = journal.ErrBusy
@@ -237,7 +237,7 @@ func TestAutomationRejectsInvalidAndBusyBeforeWrites(t *testing.T) {
 
 func TestPausedPlaybackStillRejectsAnExistingReservation(t *testing.T) {
 	c, j, d, req, cmd := automationFixture(t)
-	d.s.State = "pause"
+	d.s.State = heos.PlayStatePause
 	j.ops["existing"] = journal.Operation{ID: "existing", Player: "room", State: journal.Running}
 	p, _ := c.reads.Player("room")
 	req.IfMatch = fmt.Sprintf("%q", p.Revision)
@@ -272,9 +272,9 @@ func TestAutomationReleasesOnInterventionEvenWithoutEvents(t *testing.T) {
 					v := true
 					d.s.Muted = &v
 				case "pause":
-					d.s.State = "pause"
+					d.s.State = heos.PlayStatePause
 				case "stop":
-					d.s.State = "stop"
+					d.s.State = heos.PlayStateStop
 				case "unknown-qid":
 					m := *d.s.Media
 					m.QueueID = "2"
@@ -394,7 +394,7 @@ func TestAutomationCancellationAndShutdownJoinWorker(t *testing.T) {
 				cancelRequest := req
 				cancelRequest.Key, cancelRequest.IfMatch = "cancel", ""
 				cancelRequest.Endpoint = "/v1/operations/" + a.ID + "/cancel"
-				cancelCommand := Command{Kind: "cancel", Mode: mode, Target: a.ID}
+				cancelCommand := Command{Kind: CommandKindCancel, Mode: mode, Target: a.ID}
 				cancelRequest.Body, _ = json.Marshal(cancelCommand)
 				b, err := c.Submit(context.Background(), cancelRequest, cancelCommand)
 				if err != nil {
@@ -447,7 +447,7 @@ func TestAutomationZeroRampFadeAndLateTick(t *testing.T) {
 			if late {
 				want = 5
 			} // no catch-up ramp after the deadline
-			if len(d.writes) != want || d.writes[want-1].State != "stop" {
+			if len(d.writes) != want || d.writes[want-1].State != heos.PlayStateStop {
 				t.Fatal(d.writes)
 			}
 		})

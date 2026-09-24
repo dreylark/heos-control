@@ -101,7 +101,7 @@ func TestObservationMediaFreshnessAcrossReadPaths(t *testing.T) {
 				if s.MediaStale != wantStale || s.Stale || !s.Verified || s.ObservedAt != at || server.commands.Load() != count {
 					t.Fatalf("scalar/progress publication renewed media: %+v", s)
 				}
-				if err := o.RefreshScalars(context.Background(), "volume"); err != nil {
+				if err := o.RefreshScalars(context.Background(), MutationKindVolume); err != nil {
 					t.Fatal(err)
 				}
 				if s = o.Snapshot(); s.MediaStale != wantStale || s.ObservedAt != at || server.commands.Load() != count+2 {

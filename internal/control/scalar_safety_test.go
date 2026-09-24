@@ -18,7 +18,7 @@ func TestScalarReadyAtPlaybackDeadlineCannotConfirmLateStep(t *testing.T) {
 	clock.events = []modeClockEvent{{r.playbackDeadline, func() {
 		r.event(modeEvent("shuffle", "on"))
 	}}}
-	err := c.write(c.lanes["room"], r, heos.Mutation{Kind: "mode", Repeat: "off", Shuffle: true})
+	err := c.write(c.lanes["room"], r, heos.Mutation{Kind: heos.MutationKindMode, Repeat: heos.RepeatOff, Shuffle: true})
 	if !errors.Is(err, context.DeadlineExceeded) || r.confirmed != 0 || len(d.writes) != 1 || len(d.scalarReads) != 0 || clock.Now() != r.playbackDeadline {
 		t.Fatalf("late ready state escaped playback bound: err=%v confirmed=%d writes=%d fallback=%d elapsed=%s", err, r.confirmed, len(d.writes), len(d.scalarReads), clock.Now().Sub(began))
 	}
@@ -44,7 +44,7 @@ func TestScalarJournalDelayCannotSendPositiveLevelAfterPlaybackDeadline(t *testi
 		r.event(heos.Event{Command: "event/player_volume_changed", Params: url.Values{"pid": {"1"}, "level": {"21"}, "mute": {"off"}}})
 		return nil
 	}
-	err := c.write(c.lanes["room"], r, heos.Mutation{Kind: "volume", Level: 21})
+	err := c.write(c.lanes["room"], r, heos.Mutation{Kind: heos.MutationKindVolume, Level: 21})
 	if !errors.Is(err, errPlaybackTimelineChanged) || len(d.writes) != 0 || len(d.scalarReads) != 0 {
 		t.Fatalf("journal delay allowed late positive volume: err=%v writes=%+v fallback=%d", err, d.writes, len(d.scalarReads))
 	}
@@ -59,7 +59,7 @@ func TestScalarPositiveWireGuardEndsAtPlaybackDeadline(t *testing.T) {
 		return nil
 	}
 	before := time.Now()
-	if err := c.write(c.lanes["room"], r, heos.Mutation{Kind: "volume", Level: 21}); err != nil {
+	if err := c.write(c.lanes["room"], r, heos.Mutation{Kind: heos.MutationKindVolume, Level: 21}); err != nil {
 		t.Fatal(err)
 	}
 	if d.lastGuard.ExpiresAt.Before(before.Add(900*time.Millisecond)) || d.lastGuard.ExpiresAt.After(time.Now().Add(time.Second)) {
@@ -92,10 +92,10 @@ func TestScalarProjectionCannotSkipUnconsumedMetadataEvent(t *testing.T) {
 			d := &scalarPublicationSpy{modeEventDevice: base}
 			l := c.lanes["room"]
 			l.device.Observer, l.device.Client, l.writer = d, d, d
-			r.expected.State, d.s.State = "play", "play"
+			r.expected.State, d.s.State = heos.PlayStatePlay, "play"
 			r.queueOwned, r.automating, r.confirmed = true, true, 1
 			r.playbackDeadline = clock.Now().Add(30 * time.Second)
-			m := heos.Mutation{Kind: "volume", Level: 21}
+			m := heos.Mutation{Kind: heos.MutationKindVolume, Level: 21}
 			r.expect(m)
 			r.unconfirmed = true // The successful setter reply has been received.
 			r.event(heos.Event{Command: "event/player_volume_changed", Params: url.Values{"pid": {"1"}, "level": {"21"}, "mute": {"off"}}})
@@ -114,7 +114,7 @@ func TestScalarProjectionCannotSkipUnconsumedMetadataEvent(t *testing.T) {
 			if d.published != 0 || !r.observationPending() {
 				t.Fatalf("scalar publication consumed metadata/state history: published=%d pending=%t", d.published, r.observationPending())
 			}
-			if _, err := c.prewriteObservation(l, r, heos.Mutation{Kind: "volume", Level: 22}); err != nil {
+			if _, err := c.prewriteObservation(l, r, heos.Mutation{Kind: heos.MutationKindVolume, Level: 22}); err != nil {
 				t.Fatal(err)
 			}
 			if d.resolved != 1 {
@@ -155,7 +155,7 @@ func TestScalarDuplicateRacingPrewriteDoesNotForceFullRead(t *testing.T) {
 		r.event(heos.Event{Command: "event/player_volume_changed", Token: base.s.Token,
 			Params: url.Values{"pid": {"1"}, "level": {"20"}, "mute": {"off"}}})
 	}
-	snapshot, err := c.prewriteObservation(l, r, heos.Mutation{Kind: "volume", Level: 21})
+	snapshot, err := c.prewriteObservation(l, r, heos.Mutation{Kind: heos.MutationKindVolume, Level: 21})
 	if err != nil || len(base.reads) != 0 || d.reconciled != 1 || snapshot.Token != base.s.Token {
 		t.Fatalf("duplicate required a full read: err=%v reads=%d reconciliations=%d token=%+v", err, len(base.reads), d.reconciled, snapshot.Token)
 	}

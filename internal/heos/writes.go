@@ -12,13 +12,13 @@ import (
 // are checked by the coordinator; the owner rechecks the observation token
 // immediately before any bytes are sent. There is no automatic write replay.
 type Mutation struct {
-	Kind      string
+	Kind      MutationKind
 	Player    ID
 	Level     int
 	Muted     bool
-	State     string
+	State     PlayState
 	Direction string
-	Repeat    string
+	Repeat    Repeat
 	Shuffle   bool
 	Item      Item
 }
@@ -29,26 +29,26 @@ func (m Mutation) command() (string, url.Values, error) {
 	}
 	a := url.Values{"pid": {string(m.Player)}}
 	switch m.Kind {
-	case "volume":
+	case MutationKindVolume:
 		if m.Level < 0 || m.Level > 100 {
 			return "", nil, ErrBounds
 		}
 		a.Set("level", strconv.Itoa(m.Level))
 		return "player/set_volume", a, nil
-	case "mute":
+	case MutationKindMute:
 		state := "off"
 		if m.Muted {
 			state = "on"
 		}
 		a.Set("state", state)
 		return "player/set_mute", a, nil
-	case "transport":
-		if m.State != "play" && m.State != "pause" && m.State != "stop" {
+	case MutationKindTransport:
+		if !m.State.Writable() {
 			return "", nil, ErrBounds
 		}
-		a.Set("state", m.State)
+		a.Set("state", string(m.State))
 		return "player/set_play_state", a, nil
-	case "skip":
+	case MutationKindSkip:
 		// HEOS CLI Protocol Specification 1.17, 4.2.21 and 4.2.22. The success
 		// reply carries pid only and does not identify the resulting queue entry.
 		switch m.Direction {
@@ -59,18 +59,18 @@ func (m Mutation) command() (string, url.Values, error) {
 		default:
 			return "", nil, ErrBounds
 		}
-	case "mode":
-		if m.Repeat != "off" && m.Repeat != "on_all" && m.Repeat != "on_one" {
+	case MutationKindMode:
+		if !m.Repeat.Known() {
 			return "", nil, ErrBounds
 		}
-		a.Set("repeat", m.Repeat)
+		a.Set("repeat", string(m.Repeat))
 		shuffle := "off"
 		if m.Shuffle {
 			shuffle = "on"
 		}
 		a.Set("shuffle", shuffle)
 		return "player/set_play_mode", a, nil
-	case "queue":
+	case MutationKindQueue:
 		i := m.Item
 		if i.Playable != "yes" || i.Source == "" || i.ContainerID == "" {
 			return "", nil, ErrBounds

@@ -172,7 +172,7 @@ func TestObservationStopAfterPlayReadKeepsOriginalTransitionDeadline(t *testing.
 	c, _, base, _ := fixtureCoordinator(t)
 	clock := &advancingClock{now: time.Now()}
 	c.clock = clock
-	base.s.State = "play"
+	base.s.State = heos.PlayStatePlay
 	base.s.ObservedAt = clock.Now()
 	base.s.Media = &heos.Media{Source: "1024", ID: "track", QueueID: "1"}
 	total := 1
@@ -190,7 +190,7 @@ func TestObservationStopAfterPlayReadKeepsOriginalTransitionDeadline(t *testing.
 	r.expected = fresh
 	// Stop arrives after the completed Play snapshot and before reconciliation.
 	// That earlier snapshot cannot prove Play after this new transition began.
-	d.s.State = "stop"
+	d.s.State = heos.PlayStateStop
 	r.event(heos.Event{Command: "event/player_state_changed", Params: url.Values{"pid": {"1"}, "state": {"stop"}}})
 	deadline := r.queueWait
 	d.onRefresh = func() {
@@ -216,7 +216,7 @@ func observationExecution(t *testing.T, clock controlClock) *execution {
 	volume, muted := 20, false
 	return &execution{ctx: ctx, cancel: cancel, now: clock.Now, wake: make(chan struct{}, 1),
 		events: map[string][]map[string]string{}, queueOwned: true, automating: true,
-		expected: heos.Snapshot{Player: heos.Player{ID: "1"}, State: "play", Volume: &volume, Muted: &muted},
+		expected: heos.Snapshot{Player: heos.Player{ID: "1"}, State: heos.PlayStatePlay, Volume: &volume, Muted: &muted},
 		lastRead: clock.Now(), lastReadAttempt: clock.Now()}
 }
 

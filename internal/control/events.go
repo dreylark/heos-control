@@ -94,7 +94,7 @@ func (r *execution) acceptExpectedEvent(e heos.Event) bool {
 		for k, v := range want {
 			// Scalar expectations are handled above. The only remaining
 			// value-bearing expectation is a validated transport state.
-			if k != "state" || data.State != v {
+			if k != "state" || string(data.State) != v {
 				match = false
 			}
 		}
@@ -102,7 +102,7 @@ func (r *execution) acceptExpectedEvent(e heos.Event) bool {
 			// Home 150 can repeat loading stop notifications (Denon 5.4).
 			// Keep this expectation until play or the confirmation deadline;
 			// notification count does not identify a manual controller.
-			if r.queueStart == queueAwaitingPlay && data.Kind == heos.EventState && data.State == "stop" {
+			if r.queueStart == queueAwaitingPlay && data.Kind == heos.EventState && data.State == heos.PlayStateStop {
 				return true
 			}
 			// State/media/queue events can wake asynchronous confirmation.
@@ -117,7 +117,7 @@ func (r *execution) acceptExpectedEvent(e heos.Event) bool {
 			if data.Kind != heos.EventNowPlaying && !r.keepExpectations {
 				r.events[e.Command] = append(list[:i], list[i+1:]...)
 			}
-			if data.Kind == heos.EventState && data.State == "play" && !r.keepExpectations {
+			if data.Kind == heos.EventState && data.State == heos.PlayStatePlay && !r.keepExpectations {
 				// Once playback starts, even a stop during queue readback
 				// is intervention, not the preceding loading state.
 				r.events[e.Command] = nil
@@ -157,9 +157,9 @@ func (r *execution) expect(m heos.Mutation) {
 		r.events[name] = append(list, params)
 	}
 	switch m.Kind {
-	case "volume", "mute":
+	case heos.MutationKindVolume, heos.MutationKindMute:
 		level, muted := *r.expected.Volume, *r.expected.Muted
-		if m.Kind == "volume" {
+		if m.Kind == heos.MutationKindVolume {
 			level = m.Level
 		} else {
 			muted = m.Muted
@@ -169,41 +169,41 @@ func (r *execution) expect(m heos.Mutation) {
 			mute = "on"
 		}
 		add("event/player_volume_changed", map[string]string{"level": strconv.Itoa(level), "mute": mute})
-		if m.Kind == "volume" && muted {
+		if m.Kind == heos.MutationKindVolume && muted {
 			// Home 150 may clear mute as a side effect of setting volume.
 			// Both outcomes still require readback of the requested level.
 			add("event/player_volume_changed", map[string]string{"level": strconv.Itoa(level), "mute": "off"})
 		}
-	case "transport":
-		add("event/player_state_changed", map[string]string{"state": m.State})
+	case heos.MutationKindTransport:
+		add("event/player_state_changed", map[string]string{"state": string(m.State)})
 		// Home 150 also refreshes now-playing metadata during transport.
 		// This notification has no MID (Denon 5.5); readback verifies it.
 		add("event/player_now_playing_changed", map[string]string{})
-	case "skip":
+	case heos.MutationKindSkip:
 		// Play next/previous can report stop or unknown before the new entry
 		// (Denon 5.4/5.5). Keep every transitional state: duplicates and either
 		// order must not look like a second controller. Readback still decides.
 		r.keepExpectations = true
 		add("event/player_now_playing_changed", map[string]string{})
-		for _, state := range []string{"stop", "unknown", "play", "pause"} {
-			add("event/player_state_changed", map[string]string{"state": state})
+		for _, state := range []heos.PlayState{heos.PlayStateStop, heos.PlayStateUnknown, heos.PlayStatePlay, heos.PlayStatePause} {
+			add("event/player_state_changed", map[string]string{"state": string(state)})
 		}
-	case "mode":
-		add("event/repeat_mode_changed", map[string]string{"repeat": m.Repeat})
+	case heos.MutationKindMode:
+		add("event/repeat_mode_changed", map[string]string{"repeat": string(m.Repeat)})
 		shuffle := "off"
 		if m.Shuffle {
 			shuffle = "on"
 		}
 		add("event/shuffle_mode_changed", map[string]string{"shuffle": shuffle})
-	case "queue":
+	case heos.MutationKindQueue:
 		r.queueStart = queueAwaitingPlay
 		add("event/player_queue_changed", map[string]string{})
 		add("event/player_now_playing_changed", map[string]string{})
 		// Home 150 can pass through stop while replacing a paused queue.
 		// This is a loading allowance, not permission to ignore a later Stop.
-		if r.expected.State == "stop" || r.expected.State == "pause" {
-			add("event/player_state_changed", map[string]string{"state": "stop"})
+		if r.expected.State == heos.PlayStateStop || r.expected.State == heos.PlayStatePause {
+			add("event/player_state_changed", map[string]string{"state": string(heos.PlayStateStop)})
 		}
-		add("event/player_state_changed", map[string]string{"state": "play"})
+		add("event/player_state_changed", map[string]string{"state": string(heos.PlayStatePlay)})
 	}
 }

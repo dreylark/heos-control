@@ -43,7 +43,7 @@ func TestSubscribeThenObserveWithDelayedDiscovery(t *testing.T) {
 	if err := o.Refresh(context.Background()); !errors.Is(err, ErrIdentity) {
 		t.Fatal(err)
 	}
-	if state := o.Snapshot(); state.Verified || !state.Stale || state.State != "unknown" {
+	if state := o.Snapshot(); state.Verified || !state.Stale || state.State != PlayStateUnknown {
 		t.Fatal(state)
 	}
 	// A later caller/poll retries observations; the client does not replay them.

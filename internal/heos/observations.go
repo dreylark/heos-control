@@ -120,13 +120,13 @@ func (c *Client) Queue(ctx context.Context, pid ID, start, limit int) (QueuePage
 }
 
 type Snapshot struct {
-	Repeat     string
+	Repeat     Repeat
 	Shuffle    bool
 	Key        string
 	Player     Player
 	Groups     []Group
 	Grouped    bool
-	State      string
+	State      PlayState
 	Volume     *int
 	Muted      *bool
 	Media      *Media
@@ -189,7 +189,7 @@ func NewObserver(client *Client, identity Identity, ttl time.Duration) (*Observe
 	}
 	return &Observer{client: client, identity: identity, ttl: ttl, now: time.Now, gate: make(chan struct{}, 1), invalid: true,
 		wake: make(chan struct{}, 1), changed: make(chan struct{}), newTimer: newObservationTimer,
-		last: Snapshot{Key: identity.Key, State: "unknown", Stale: true}}, nil
+		last: Snapshot{Key: identity.Key, State: PlayStateUnknown, Stale: true}}, nil
 }
 
 func clonePtr[T any](p *T) *T {
@@ -286,7 +286,7 @@ func (o *Observer) refresh(ctx context.Context, force bool) error {
 	if !view.Connected || !sameGlobal(view.Token, r.Token) {
 		return ErrStale
 	}
-	s := Snapshot{Key: o.identity.Key, Player: player, Token: view.Token, State: "unknown"}
+	s := Snapshot{Key: o.identity.Key, Player: player, Token: view.Token, State: PlayStateUnknown}
 	read := func(name string, args url.Values) (Response, error) {
 		r, err := o.client.Read(ctx, name, args)
 		if err == nil && (!sameGlobal(r.Token, s.Token) || o.client.PlayerView(player.ID).Token != s.Token) {
@@ -324,10 +324,8 @@ func (o *Observer) refresh(ctx context.Context, force bool) error {
 	if err != nil {
 		return err
 	}
-	s.State = r.Params.Get("state")
-	switch s.State {
-	case "play", "pause", "stop", "unknown":
-	default:
+	s.State = PlayState(r.Params.Get("state"))
+	if !s.State.Known() {
 		return ErrProtocol
 	}
 	r, err = read("player/get_volume", args)
@@ -353,8 +351,8 @@ func (o *Observer) refresh(ctx context.Context, force bool) error {
 	if err != nil {
 		return err
 	}
-	s.Repeat = r.Params.Get("repeat")
-	if s.Repeat != "off" && s.Repeat != "on_all" && s.Repeat != "on_one" {
+	s.Repeat = Repeat(r.Params.Get("repeat"))
+	if !s.Repeat.Known() {
 		return ErrProtocol
 	}
 	shuffle := r.Params.Get("shuffle")
@@ -372,7 +370,7 @@ func (o *Observer) refresh(ctx context.Context, force bool) error {
 		return err
 	}
 	s.Media = &media
-	s.MediaStale = s.State != "play" && s.State != "pause"
+	s.MediaStale = !s.State.Active()
 	s.Queue, err = o.client.Queue(ctx, player.ID, 0, 100)
 	if err != nil {
 		return fmt.Errorf("player/get_queue: %w", err)

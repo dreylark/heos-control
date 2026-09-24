@@ -50,8 +50,8 @@ func policyFuzzCopy(s heos.Snapshot) heos.Snapshot {
 // helpers. MID/QID relations model Denon 4.2.5/4.2.15; SID 1024 is local media.
 func policyFuzzQueue(size int, volume byte) (heos.Snapshot, map[heos.ID]bool) {
 	level, muted := int(volume)%101, false
-	s := heos.Snapshot{Player: heos.Player{ID: "1", Serial: "fixture-player"}, State: "play",
-		Volume: &level, Muted: &muted, Repeat: "off", Shuffle: true, Connected: true, Verified: true,
+	s := heos.Snapshot{Player: heos.Player{ID: "1", Serial: "fixture-player"}, State: heos.PlayStatePlay,
+		Volume: &level, Muted: &muted, Repeat: heos.RepeatOff, Shuffle: true, Connected: true, Verified: true,
 		Token: heos.Token{Generation: 1, Player: 1}}
 	members := make(map[heos.ID]bool, size)
 	for i := range size {
@@ -75,7 +75,7 @@ func policyFuzzControls(s *heos.Snapshot, mask byte) {
 		s.Muted = &m
 	}
 	if mask&4 != 0 {
-		s.Repeat = "on_all"
+		s.Repeat = heos.RepeatOnAll
 	}
 	if mask&8 != 0 {
 		s.Shuffle = false
@@ -110,7 +110,7 @@ func policyFuzzDelay(value byte) time.Duration {
 // This oracle checks the public bounded-queue contract directly. It does not
 // call completeOwnedQueue, queuedMedia, queueResultProblem or a decision helper.
 func policyFuzzCompleteSelection(s heos.Snapshot, selected map[heos.ID]bool) bool {
-	if s.State != "play" || s.Media == nil || s.Media.Source != "1024" || s.Media.ID == "" || s.Media.QueueID == "" ||
+	if s.State != heos.PlayStatePlay || s.Media == nil || s.Media.Source != "1024" || s.Media.ID == "" || s.Media.QueueID == "" ||
 		s.Queue.Total == nil || *s.Queue.Total != len(s.Queue.Items) || len(s.Queue.Items) == 0 || s.Queue.Next != nil {
 		return false
 	}
@@ -174,7 +174,7 @@ func FuzzQueueStartPolicy(f *testing.F) {
 		selected, members := policyFuzzQueue(1+int(policyFuzzByte(data, 0)%8), policyFuzzByte(data, 9))
 		origin := time.Date(2026, 9, 13, 7, 0, 0, 0, time.UTC).Add(time.Duration(policyFuzzByte(data, 11)) * time.Hour)
 		old := policyFuzzCopy(selected)
-		old.State = [...]string{"stop", "pause"}[policyFuzzByte(data, 1)%2]
+		old.State = [...]heos.PlayState{heos.PlayStateStop, heos.PlayStatePause}[policyFuzzByte(data, 1)%2]
 		old.Media = &heos.Media{Source: "1024", ID: "9000", QueueID: "1"}
 		old.Queue.Items = []heos.Media{*old.Media}
 		one := 1
@@ -190,7 +190,7 @@ func FuzzQueueStartPolicy(f *testing.F) {
 		if flags&4 != 0 {
 			facts.Unsafe = heos.ErrStale
 		}
-		facts.Observed.State = [...]string{"play", "unknown", "stop", "pause", "invalid"}[policyFuzzByte(data, 5)%5]
+		facts.Observed.State = [...]heos.PlayState{heos.PlayStatePlay, heos.PlayStateUnknown, heos.PlayStateStop, heos.PlayStatePause, "invalid"}[policyFuzzByte(data, 5)%5]
 		switch policyFuzzByte(data, 6) % 8 {
 		case 1:
 			facts.Observed.Media.QueueID = "1"
@@ -261,7 +261,7 @@ func FuzzQueueStartPolicy(f *testing.F) {
 		}
 		if d.Action == queueStartConfirm {
 			m := facts.Observed.Media
-			if facts.PendingEvents || facts.Observed.State != "play" || m == nil || m.Source != "1024" || m.ID == "" || m.QueueID == "" || !members[m.ID] {
+			if facts.PendingEvents || facts.Observed.State != heos.PlayStatePlay || m == nil || m.Source != "1024" || m.ID == "" || m.QueueID == "" || !members[m.ID] {
 				t.Fatalf("unverified playback confirmed: %+v facts=%+v", d, facts)
 			}
 			if facts.Bounded && !policyFuzzCompleteSelection(facts.Observed, members) {

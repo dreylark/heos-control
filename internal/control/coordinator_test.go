@@ -133,7 +133,7 @@ func (d *fakeDevice) Refresh(ctx context.Context) error {
 	return ctx.Err()
 }
 func (d *fakeDevice) Write(ctx context.Context, m heos.Mutation, _ heos.Guard) (heos.Response, error) {
-	if d.block != nil && m.Kind == "volume" {
+	if d.block != nil && m.Kind == heos.MutationKindVolume {
 		select {
 		case <-d.block:
 		case <-ctx.Done():
@@ -156,7 +156,7 @@ func (d *fakeDevice) Write(ctx context.Context, m heos.Mutation, _ heos.Guard) (
 	}()
 	d.writes = append(d.writes, m)
 	switch m.Kind {
-	case "mode":
+	case heos.MutationKindMode:
 		d.s.Repeat = m.Repeat
 		d.s.Shuffle = m.Shuffle
 		// The ordinary fake applies mode synchronously and emits Denon
@@ -167,26 +167,26 @@ func (d *fakeDevice) Write(ctx context.Context, m heos.Mutation, _ heos.Guard) (
 				shuffle = "on"
 			}
 			events = []heos.Event{
-				{Command: "event/repeat_mode_changed", Params: url.Values{"pid": {string(d.s.Player.ID)}, "repeat": {m.Repeat}}},
+				{Command: "event/repeat_mode_changed", Params: url.Values{"pid": {string(d.s.Player.ID)}, "repeat": {string(m.Repeat)}}},
 				{Command: "event/shuffle_mode_changed", Params: url.Values{"pid": {string(d.s.Player.ID)}, "shuffle": {shuffle}}},
 			}
 		}
-	case "volume":
+	case heos.MutationKindVolume:
 		v := m.Level
 		d.s.Volume = &v
-	case "mute":
+	case heos.MutationKindMute:
 		v := m.Muted
 		d.s.Muted = &v
-	case "transport":
+	case heos.MutationKindTransport:
 		d.s.State = m.State
-	case "queue":
-		d.s.State = "play"
+	case heos.MutationKindQueue:
+		d.s.State = heos.PlayStatePlay
 		d.s.Media = &heos.Media{Source: "1024", ID: m.Item.MediaID, QueueID: "1", Album: m.Item.Name}
 		d.s.Queue.Items = []heos.Media{*d.s.Media}
 		total := 1
 		d.s.Queue.Total = &total
 	}
-	if (m.Kind == "volume" || m.Kind == "mute") && d.handler != nil {
+	if (m.Kind == heos.MutationKindVolume || m.Kind == heos.MutationKindMute) && d.handler != nil {
 		mute := "off"
 		if *d.s.Muted {
 			mute = "on"
@@ -209,7 +209,7 @@ func fixtureCoordinator(t *testing.T) (*Coordinator, *memoryJournal, *fakeDevice
 	t.Helper()
 	v := 20
 	m := false
-	d := &fakeDevice{s: heos.Snapshot{Player: heos.Player{ID: "1", Serial: "serial"}, State: "stop", Volume: &v, Muted: &m, Connected: true, Verified: true, ObservedAt: time.Now()}}
+	d := &fakeDevice{s: heos.Snapshot{Player: heos.Player{ID: "1", Serial: "serial"}, State: heos.PlayStateStop, Volume: &v, Muted: &m, Connected: true, Verified: true, ObservedAt: time.Now()}}
 	ceiling := 40
 	reads := NewReads("test", []Device{{Config: config.Player{Key: "room", Serial: "serial", WritesEnabled: true, VolumeCeiling: &ceiling}, Observer: d, Client: d}}, nil)
 	j := &memoryJournal{ops: map[string]journal.Operation{}, keys: map[string]string{}}
@@ -237,7 +237,7 @@ func awaitOperation(t *testing.T, j *memoryJournal, id string) journal.Operation
 func TestAcceptedWorkSurvivesDisconnectAndRetry(t *testing.T) {
 	c, j, d, r := fixtureCoordinator(t)
 	ctx, cancel := context.WithCancel(context.Background())
-	a, e := c.Submit(ctx, r, Command{Kind: "volume", Level: 10})
+	a, e := c.Submit(ctx, r, Command{Kind: CommandKindVolume, Level: 10})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -246,7 +246,7 @@ func TestAcceptedWorkSurvivesDisconnectAndRetry(t *testing.T) {
 	if o.State != journal.Succeeded {
 		t.Fatal(o)
 	}
-	b, e := c.Submit(context.Background(), r, Command{Kind: "volume", Level: 10})
+	b, e := c.Submit(context.Background(), r, Command{Kind: CommandKindVolume, Level: 10})
 	if e != nil || b.ID != a.ID {
 		t.Fatal(b, e)
 	}
@@ -264,7 +264,7 @@ func TestAdmissionSafety(t *testing.T) {
 			case "stale":
 				d.s.Stale = true
 			case "unknown":
-				d.s.State = "unknown"
+				d.s.State = heos.PlayStateUnknown
 			case "grouped":
 				d.s.Grouped = true
 			case "disabled":
@@ -274,7 +274,7 @@ func TestAdmissionSafety(t *testing.T) {
 			case "revision":
 				r.IfMatch = `"wrong"`
 			}
-			if _, e := c.Submit(context.Background(), r, Command{Kind: "volume", Level: 10}); e == nil {
+			if _, e := c.Submit(context.Background(), r, Command{Kind: CommandKindVolume, Level: 10}); e == nil {
 				t.Fatal("unsafe admission")
 			}
 			if len(d.writes) != 0 {
@@ -313,13 +313,13 @@ func TestIdleCacheCannotBypassFreshChecksBeforeWriting(t *testing.T) {
 				case "offline":
 					return ErrUnavailable
 				case "unknown":
-					d.s.State = "unknown"
+					d.s.State = heos.PlayStateUnknown
 				}
 				return nil
 			}}
 			player, _ := c.reads.Player("room")
 			request.IfMatch = `"` + player.Revision + `"`
-			op, err := c.Submit(context.Background(), request, Command{Kind: "volume", Level: 30})
+			op, err := c.Submit(context.Background(), request, Command{Kind: CommandKindVolume, Level: 30})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -335,7 +335,7 @@ func TestManualSameAlbumSkipRevokesFutureWrites(t *testing.T) {
 	d.before = func(heos.Mutation) {
 		d.handler(heos.Event{Command: "event/player_now_playing_changed", Params: map[string][]string{"pid": {"1"}}})
 	}
-	a, e := c.Submit(context.Background(), r, Command{Kind: "volume", Level: 10})
+	a, e := c.Submit(context.Background(), r, Command{Kind: CommandKindVolume, Level: 10})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -352,7 +352,7 @@ func TestStopPreemptsPendingWriteAndRecordsUncertainty(t *testing.T) {
 	c, j, d, r := fixtureCoordinator(t)
 	block := make(chan struct{})
 	d.block = block
-	a, e := c.Submit(context.Background(), r, Command{Kind: "volume", Level: 10})
+	a, e := c.Submit(context.Background(), r, Command{Kind: CommandKindVolume, Level: 10})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -373,7 +373,7 @@ func TestStopPreemptsPendingWriteAndRecordsUncertainty(t *testing.T) {
 	r.Method = "POST"
 	r.IfMatch = ""
 	r.Body = json.RawMessage(`{"fade_seconds":0}`)
-	b, e := c.Submit(context.Background(), r, Command{Kind: "stop"})
+	b, e := c.Submit(context.Background(), r, Command{Kind: CommandKindStop})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -387,7 +387,7 @@ func TestStopPreemptsPendingWriteAndRecordsUncertainty(t *testing.T) {
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if len(d.writes) != 1 || d.writes[0].State != "stop" {
+	if len(d.writes) != 1 || d.writes[0].State != heos.PlayStateStop {
 		t.Fatal(d.writes)
 	}
 }
@@ -424,7 +424,7 @@ func TestFadeWritesEachIntegerOnceAndStops(t *testing.T) {
 	r.Method = "POST"
 	r.Endpoint = "/v1/players/room/stop"
 	r.Body = json.RawMessage(`{"fade_seconds":3}`)
-	a, e := c.Submit(context.Background(), r, Command{Kind: "stop", FadeSeconds: 3})
+	a, e := c.Submit(context.Background(), r, Command{Kind: CommandKindStop, FadeSeconds: 3})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -436,14 +436,14 @@ func TestFadeWritesEachIntegerOnceAndStops(t *testing.T) {
 	defer d.mu.Unlock()
 	last := 21
 	for _, m := range d.writes {
-		if m.Kind == "volume" {
+		if m.Kind == heos.MutationKindVolume {
 			if m.Level >= last {
 				t.Fatal("repeated/increasing level", d.writes)
 			}
 			last = m.Level
 		}
 	}
-	if last != 0 || d.writes[len(d.writes)-1].State != "stop" {
+	if last != 0 || d.writes[len(d.writes)-1].State != heos.PlayStateStop {
 		t.Fatal(d.writes)
 	}
 }
@@ -471,7 +471,7 @@ func TestCancelAndImmediateStopDuringFade(t *testing.T) {
 			r.Endpoint = "/v1/players/room/stop"
 			r.IfMatch = ""
 			r.Body = json.RawMessage(`{"fade_seconds":30}`)
-			a, e := c.Submit(context.Background(), r, Command{Kind: "stop", FadeSeconds: 30})
+			a, e := c.Submit(context.Background(), r, Command{Kind: CommandKindStop, FadeSeconds: 30})
 			if e != nil {
 				t.Fatal(e)
 			}
@@ -483,9 +483,9 @@ func TestCancelAndImmediateStopDuringFade(t *testing.T) {
 			r.Key = "cancel"
 			r.Endpoint = "/v1/operations/" + a.ID + "/cancel"
 			r.Body = json.RawMessage(`{"mode":"` + mode + `"}`)
-			cmd := Command{Kind: "cancel", Target: a.ID, Mode: mode}
+			cmd := Command{Kind: CommandKindCancel, Target: a.ID, Mode: mode}
 			if mode == "operator_stop" {
-				cmd = Command{Kind: "stop"}
+				cmd = Command{Kind: CommandKindStop}
 			}
 			b, e := c.Submit(context.Background(), r, cmd)
 			if e != nil {
@@ -510,7 +510,7 @@ func TestCancelAndImmediateStopDuringFade(t *testing.T) {
 			defer d.mu.Unlock()
 			count := 0
 			for _, m := range d.writes {
-				if m.Kind == "transport" {
+				if m.Kind == heos.MutationKindTransport {
 					count++
 				}
 			}
@@ -554,7 +554,7 @@ func TestJournalFailureNeverReplaysDeviceWork(t *testing.T) {
 			r.Endpoint = "/v1/players/room/stop"
 			r.IfMatch = ""
 			r.Body = json.RawMessage(`{"fade_seconds":2}`)
-			a, e := c.Submit(context.Background(), r, Command{Kind: "stop", FadeSeconds: 2})
+			a, e := c.Submit(context.Background(), r, Command{Kind: CommandKindStop, FadeSeconds: 2})
 			if e != nil {
 				t.Fatal(e)
 			}
@@ -562,7 +562,7 @@ func TestJournalFailureNeverReplaysDeviceWork(t *testing.T) {
 			d.mu.Lock()
 			defer d.mu.Unlock()
 			if dropAck {
-				if o.State != journal.Succeeded || d.writes[len(d.writes)-1].State != "stop" {
+				if o.State != journal.Succeeded || d.writes[len(d.writes)-1].State != heos.PlayStateStop {
 					t.Fatal(o, d.writes)
 				}
 			} else {
@@ -581,7 +581,7 @@ func TestExplicitTakeoverCanRevokeAFade(t *testing.T) {
 	r.Method = "POST"
 	r.IfMatch = ""
 	r.Body = json.RawMessage(`{"fade_seconds":30}`)
-	old, e := c.Submit(context.Background(), r, Command{Kind: "stop", FadeSeconds: 30})
+	old, e := c.Submit(context.Background(), r, Command{Kind: CommandKindStop, FadeSeconds: 30})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -596,7 +596,7 @@ func TestExplicitTakeoverCanRevokeAFade(t *testing.T) {
 	r.Endpoint = "/v1/players/room/mute"
 	r.IfMatch = fmt.Sprintf("%q", p.Revision)
 	r.Body = json.RawMessage(`{"muted":true,"takeover":true}`)
-	a, e := c.Submit(context.Background(), r, Command{Kind: "mute", Muted: true, Takeover: true})
+	a, e := c.Submit(context.Background(), r, Command{Kind: CommandKindMute, Muted: true, Takeover: true})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -629,7 +629,7 @@ func TestStopInterruptingCancellationFinishesTheOriginalTarget(t *testing.T) {
 	r.Method = "POST"
 	r.IfMatch = ""
 	r.Body = json.RawMessage(`{"fade_seconds":30}`)
-	original, e := c.Submit(context.Background(), r, Command{Kind: "stop", FadeSeconds: 30})
+	original, e := c.Submit(context.Background(), r, Command{Kind: CommandKindStop, FadeSeconds: 30})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -645,7 +645,7 @@ func TestStopInterruptingCancellationFinishesTheOriginalTarget(t *testing.T) {
 	r.Key = "cancel"
 	r.Endpoint = "/v1/operations/" + original.ID + "/cancel"
 	r.Body = json.RawMessage(`{"mode":"stop_owned","fade_seconds":30}`)
-	cancelled, e := c.Submit(context.Background(), r, Command{Kind: "cancel", Mode: "stop_owned", Target: original.ID, FadeSeconds: 30})
+	cancelled, e := c.Submit(context.Background(), r, Command{Kind: CommandKindCancel, Mode: "stop_owned", Target: original.ID, FadeSeconds: 30})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -653,7 +653,7 @@ func TestStopInterruptingCancellationFinishesTheOriginalTarget(t *testing.T) {
 	r.Key = "stop-now"
 	r.Endpoint = "/v1/players/room/stop"
 	r.Body = json.RawMessage(`{"fade_seconds":0}`)
-	stop, e := c.Submit(context.Background(), r, Command{Kind: "stop"})
+	stop, e := c.Submit(context.Background(), r, Command{Kind: CommandKindStop})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -678,7 +678,7 @@ func TestStopInterruptingCancellationFinishesTheOriginalTarget(t *testing.T) {
 func TestShutdownJoinsAcceptedWorkWithoutCleanupWrites(t *testing.T) {
 	c, j, d, r := fixtureCoordinator(t)
 	d.block = make(chan struct{})
-	a, e := c.Submit(context.Background(), r, Command{Kind: "volume", Level: 10})
+	a, e := c.Submit(context.Background(), r, Command{Kind: CommandKindVolume, Level: 10})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -697,7 +697,7 @@ func TestUnknownOrIncompleteEventsCannotBorrowAcknowledgements(t *testing.T) {
 	for _, event := range []heos.Event{{Command: "event/player_volume_changed", Params: map[string][]string{"level": {"10"}, "mute": {"off"}}}, {Command: "event/new_global_event", Params: map[string][]string{"pid": {"other"}}}} {
 		c, j, d, r := fixtureCoordinator(t)
 		d.before = func(heos.Mutation) { d.handler(event) }
-		a, e := c.Submit(context.Background(), r, Command{Kind: "volume", Level: 10})
+		a, e := c.Submit(context.Background(), r, Command{Kind: CommandKindVolume, Level: 10})
 		if e != nil {
 			t.Fatal(e)
 		}

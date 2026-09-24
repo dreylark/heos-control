@@ -508,7 +508,7 @@ func TestPlaybackWireOrderReadbackAndReplay(t *testing.T) {
 			defer c.Close()
 			p, _ := reads.Player("room")
 			request := journal.Request{Principal: "operator", Player: "room", Key: "play", Method: "POST", Endpoint: "/v1/players/room/playback", IfMatch: fmt.Sprintf("%q", p.Revision), Body: json.RawMessage(`{"initial_volume":{"unit":"heos","level":10}}`)}
-			cmd := Command{Kind: "playback", Level: 10, ItemRef: page.Items[0].Ref, Shuffle: true, Repeat: "off", Takeover: tc.playingInitially}
+			cmd := Command{Kind: CommandKindPlayback, Level: 10, ItemRef: page.Items[0].Ref, Shuffle: true, Repeat: heos.RepeatOff, Takeover: tc.playingInitially}
 			if tc.bounded {
 				cmd.Automation = &Automation{TargetLevel: 12, RampSeconds: 1, DurationSeconds: 3, FadeSeconds: 1}
 				if tc.longHold {

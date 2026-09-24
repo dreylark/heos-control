@@ -43,7 +43,7 @@ func (d *loadingQueueDevice) Refresh(ctx context.Context) error {
 func (d *loadingQueueDevice) Write(ctx context.Context, m heos.Mutation, guard heos.Guard) (heos.Response, error) {
 	before := d.Snapshot()
 	response, err := d.albumDevice.Write(ctx, m, guard)
-	if err != nil || m.Kind != "queue" {
+	if err != nil || m.Kind != heos.MutationKindQueue {
 		return response, err
 	}
 	d.queueSentAt = d.clock.Now()
@@ -73,7 +73,7 @@ func (d *loadingQueueDevice) Write(ctx context.Context, m heos.Mutation, guard h
 	return response, nil
 }
 
-func loadingQueueFixture(t *testing.T, initial string) (*Coordinator, *memoryJournal, *loadingQueueDevice, journal.Request, Command) {
+func loadingQueueFixture(t *testing.T, initial heos.PlayState) (*Coordinator, *memoryJournal, *loadingQueueDevice, journal.Request, Command) {
 	t.Helper()
 	c, j, base, req, cmd := albumFixture(t)
 	clock := &modeEventClock{now: time.Now()}
@@ -101,7 +101,7 @@ func loadingQueueFixture(t *testing.T, initial string) (*Coordinator, *memoryJou
 	return c, j, d, req, cmd
 }
 
-func (d *loadingQueueDevice) setQueueState(state string, media heos.Media) {
+func (d *loadingQueueDevice) setQueueState(state heos.PlayState, media heos.Media) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	total := len(d.tracks)
@@ -110,7 +110,7 @@ func (d *loadingQueueDevice) setQueueState(state string, media heos.Media) {
 }
 
 func TestQueueLoadingWaitsForSelectedMediaBeforeAutomation(t *testing.T) {
-	for _, initial := range []string{"stop", "pause"} {
+	for _, initial := range []heos.PlayState{heos.PlayStateStop, heos.PlayStatePause} {
 		for _, tc := range []struct {
 			name string
 			mid  heos.ID
@@ -118,7 +118,7 @@ func TestQueueLoadingWaitsForSelectedMediaBeforeAutomation(t *testing.T) {
 			{name: "selected-mid", mid: "track-2"},
 			{name: "unresolved-mid", mid: "loading-mid"},
 		} {
-			t.Run(initial+"/"+tc.name, func(t *testing.T) {
+			t.Run(string(initial)+"/"+tc.name, func(t *testing.T) {
 				c, j, d, req, cmd := loadingQueueFixture(t, initial)
 				clock := d.clock
 				d.intermediate.ID = tc.mid
@@ -145,14 +145,14 @@ func TestQueueLoadingWaitsForSelectedMediaBeforeAutomation(t *testing.T) {
 				c.Close()
 				queueWrites, peak := 0, 0
 				for _, w := range writes {
-					if w.mutation.Kind == "queue" {
+					if w.mutation.Kind == heos.MutationKindQueue {
 						queueWrites++
 						continue
 					}
 					if queueWrites > 0 && w.at.Before(d.playAt) {
 						t.Errorf("write before selected Play confirmation: %+v", w)
 					}
-					if w.mutation.Kind == "volume" {
+					if w.mutation.Kind == heos.MutationKindVolume {
 						peak = max(peak, w.mutation.Level)
 					}
 				}
@@ -167,7 +167,7 @@ func TestQueueLoadingWaitsForSelectedMediaBeforeAutomation(t *testing.T) {
 					t.Errorf("peak=%d; want %d", peak, cmd.Automation.TargetLevel)
 				}
 				last := writes[len(writes)-1].mutation
-				if last.Kind != "transport" || last.State != "stop" || *d.Snapshot().Volume != 0 {
+				if last.Kind != heos.MutationKindTransport || last.State != heos.PlayStateStop || *d.Snapshot().Volume != 0 {
 					t.Error("envelope did not finish with fade to zero and Stop", writes)
 				}
 				var progress PlaybackProgress
@@ -211,14 +211,14 @@ func TestQueueLoadingUnresolvedMediaBoundaries(t *testing.T) {
 			d.onLoading = func() { d.s.Queue.Items[1].QueueID = d.s.Queue.Items[0].QueueID }
 		}, "ownership_lost", 330 * time.Millisecond},
 		{"stopped-unresolved-media", func(d *loadingQueueDevice) {
-			d.onLoading = func() { d.s.State = "stop" }
+			d.onLoading = func() { d.s.State = heos.PlayStateStop }
 		}, "ownership_lost", 330 * time.Millisecond},
 		{"readback-volume-change", func(d *loadingQueueDevice) {
 			d.onLoading = func() { v := 11; d.s.Volume = &v }
 		}, "ownership_lost", 330 * time.Millisecond},
 		{"manual-pause", func(d *loadingQueueDevice) {
 			d.onPlay = func() {
-				d.s.State = "pause"
+				d.s.State = heos.PlayStatePause
 				d.handler(heos.Event{Command: "event/player_state_changed", Params: url.Values{"pid": {"1"}, "state": {"pause"}}})
 			}
 		}, "ownership_lost", 1250 * time.Millisecond},
@@ -245,8 +245,8 @@ func TestQueueLoadingUnresolvedMediaBoundaries(t *testing.T) {
 			}
 		}, "ownership_lost", 1250 * time.Millisecond},
 	} {
-		for _, initial := range []string{"stop", "pause"} {
-			t.Run(initial+"/"+tc.name, func(t *testing.T) {
+		for _, initial := range []heos.PlayState{heos.PlayStateStop, heos.PlayStatePause} {
+			t.Run(string(initial)+"/"+tc.name, func(t *testing.T) {
 				c, j, d, req, cmd := loadingQueueFixture(t, initial)
 				tc.setup(d)
 				a, err := c.Submit(context.Background(), req, cmd)
@@ -258,7 +258,7 @@ func TestQueueLoadingUnresolvedMediaBoundaries(t *testing.T) {
 				if o.State != journal.Uncertain || o.ErrorCode != tc.code || d.clock.Now().Sub(d.queueSentAt) != tc.elapsed {
 					t.Errorf("state=%s code=%s elapsed=%s; want uncertain/%s at %s", o.State, o.ErrorCode, d.clock.Now().Sub(d.queueSentAt), tc.code, tc.elapsed)
 				}
-				if len(d.writes) != 4 || d.writes[3].Kind != "queue" || *d.s.Volume > 11 {
+				if len(d.writes) != 4 || d.writes[3].Kind != heos.MutationKindQueue || *d.s.Volume > 11 {
 					t.Error("unconfirmed queue caused another write or speculative cleanup", d.writes)
 				}
 				for i := 1; i < len(d.reads); i++ {
@@ -277,7 +277,7 @@ func TestQueueLoadingNewEventDuringReadCannotConfirmOlderPlay(t *testing.T) {
 	d.intermediate = d.tracks[1]
 	notified := false
 	d.onRefresh = func() {
-		if d.s.State == "play" && !notified {
+		if d.s.State == heos.PlayStatePlay && !notified {
 			notified = true
 			d.handler(heos.Event{Command: "event/player_now_playing_changed", Params: url.Values{"pid": {"1"}}})
 		}

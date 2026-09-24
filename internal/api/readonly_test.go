@@ -19,7 +19,9 @@ import (
 
 type apiObservation struct{}
 
-func (apiObservation) Snapshot() heos.Snapshot       { return heos.Snapshot{State: "unknown", Stale: true} }
+func (apiObservation) Snapshot() heos.Snapshot {
+	return heos.Snapshot{State: heos.PlayStateUnknown, Stale: true}
+}
 func (apiObservation) Refresh(context.Context) error { panic("rejected request reached device") }
 
 type readJournal struct{ op journal.Operation }

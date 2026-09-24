@@ -18,14 +18,14 @@ func TestPlaybackPreflightChecksConcreteRequestWithoutWrites(t *testing.T) {
 			switch name {
 			case "short playback":
 				cmd.Automation = nil
-				d.s.State = "play"
+				d.s.State = heos.PlayStatePlay
 			case "playing":
-				d.s.State = "play"
+				d.s.State = heos.PlayStatePlay
 				warning = "player_busy"
 			case "paused":
-				d.s.State = "pause"
+				d.s.State = heos.PlayStatePause
 			case "takeover":
-				d.s.State = "play"
+				d.s.State = heos.PlayStatePlay
 				cmd.Takeover = true
 			case "disabled":
 				c.reads.devices[0].Config.WritesEnabled = false
@@ -46,7 +46,7 @@ func TestPlaybackPreflightChecksConcreteRequestWithoutWrites(t *testing.T) {
 				d.s.Grouped = true
 				warning = "grouped_target"
 			case "unknown state":
-				d.s.State = "unknown"
+				d.s.State = heos.PlayStateUnknown
 				warning = "state_unavailable"
 			case "unknown volume":
 				d.s.Volume = nil

@@ -26,7 +26,7 @@ func TestMalformedEventCannotPreserveOwnership(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			_, r, _, _ := modeEventFixture(t)
 			r.queueOwned, r.automating = true, true
-			r.expect(heos.Mutation{Kind: "transport", State: "play"})
+			r.expect(heos.Mutation{Kind: heos.MutationKindTransport, State: heos.PlayStatePlay})
 			r.event(tc.event)
 			if !errors.Is(context.Cause(r.ctx), ErrOwnership) {
 				t.Fatal("malformed event preserved ownership", context.Cause(r.ctx))
@@ -51,7 +51,7 @@ func TestPartialEventKeepsOnlyValidatedDiagnosticFields(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, r, _, _ := modeEventFixture(t)
-			r.expect(heos.Mutation{Kind: "volume", Level: 21})
+			r.expect(heos.Mutation{Kind: heos.MutationKindVolume, Level: 21})
 			r.event(heos.Event{Command: "event/player_volume_changed", Params: tc.params})
 			var lost *ownershipError
 			if !errors.As(context.Cause(r.ctx), &lost) {
@@ -81,7 +81,7 @@ func TestMalformedScalarForUnambiguousOtherPlayerDoesNotCancel(t *testing.T) {
 func TestControlUsesDecodedEventValues(t *testing.T) {
 	t.Run("scalar-confirmation", func(t *testing.T) {
 		_, r, _, _ := modeEventFixture(t)
-		r.expect(heos.Mutation{Kind: "volume", Level: 21})
+		r.expect(heos.Mutation{Kind: heos.MutationKindVolume, Level: 21})
 		e := volumeEvent("21", "off").Decode()
 		e.Params.Set("level", "99")
 		e.Params.Set("mute", "on")
@@ -93,7 +93,7 @@ func TestControlUsesDecodedEventValues(t *testing.T) {
 	})
 	t.Run("transport-confirmation", func(t *testing.T) {
 		_, r, _, _ := modeEventFixture(t)
-		r.expect(heos.Mutation{Kind: "transport", State: "play"})
+		r.expect(heos.Mutation{Kind: heos.MutationKindTransport, State: heos.PlayStatePlay})
 		e := heos.Event{Command: "event/player_state_changed", Params: url.Values{"pid": {"1"}, "state": {"play"}}}.Decode()
 		e.Params.Set("state", "pause")
 		r.event(e)
@@ -111,7 +111,7 @@ func TestControlUsesDecodedEventValues(t *testing.T) {
 	})
 	t.Run("partial-diagnostics", func(t *testing.T) {
 		_, r, _, _ := modeEventFixture(t)
-		r.expect(heos.Mutation{Kind: "volume", Level: 21})
+		r.expect(heos.Mutation{Kind: heos.MutationKindVolume, Level: 21})
 		e := heos.Event{Command: "event/player_volume_changed", Params: url.Values{"pid": {"1"}, "level": {"21"}}}.Decode()
 		e.Params.Set("level", "99")
 		e.Params.Set("mute", "on")

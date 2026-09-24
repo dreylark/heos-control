@@ -17,32 +17,32 @@ type scalarConfirmation struct {
 }
 
 func scalarMutation(m heos.Mutation) bool {
-	return m.Kind == "volume" || m.Kind == "mute" || m.Kind == "mode"
+	return m.Kind == heos.MutationKindVolume || m.Kind == heos.MutationKindMute || m.Kind == heos.MutationKindMode
 }
 
 func newScalarConfirmation(m heos.Mutation, before heos.Snapshot) *scalarConfirmation {
 	p := &scalarConfirmation{command: m, observed: before}
 	switch m.Kind {
-	case "volume":
+	case heos.MutationKindVolume:
 		// Even an unchanged volume can clear an existing mute on Home 150.
 		p.volumeSeen = before.Volume != nil && *before.Volume == m.Level && before.Muted != nil && !*before.Muted
-	case "mute":
+	case heos.MutationKindMute:
 		p.volumeSeen = before.Muted != nil && *before.Muted == m.Muted
-	case "mode":
+	case heos.MutationKindMode:
 		p.repeatSeen, p.shuffleSeen = before.Repeat == m.Repeat, before.Shuffle == m.Shuffle
 	}
 	return p
 }
 
 func (p *scalarConfirmation) ready() bool {
-	if p.command.Kind == "mode" {
+	if p.command.Kind == heos.MutationKindMode {
 		return p.repeatSeen && p.shuffleSeen
 	}
 	return p.volumeSeen
 }
 
 func (p *scalarConfirmation) result(s heos.Snapshot) heos.Snapshot {
-	if p.command.Kind == "mode" {
+	if p.command.Kind == heos.MutationKindMode {
 		s.Repeat, s.Shuffle = p.observed.Repeat, p.observed.Shuffle
 	} else {
 		s.Volume, s.Muted = p.observed.Volume, p.observed.Muted
@@ -61,12 +61,12 @@ func (r *execution) acceptScalarEvent(e heos.Event) bool {
 	p := r.scalar
 	switch data.Kind {
 	case heos.EventVolume:
-		if p == nil || p.command.Kind == "mode" {
+		if p == nil || p.command.Kind == heos.MutationKindMode {
 			return confirmedVolumeEvent(e, r.expected)
 		}
 		want := r.expected
 		m := p.command
-		if m.Kind == "volume" {
+		if m.Kind == heos.MutationKindVolume {
 			v := m.Level
 			want.Volume = &v
 		} else {
@@ -74,7 +74,7 @@ func (r *execution) acceptScalarEvent(e heos.Event) bool {
 			want.Muted = &v
 		}
 		match := confirmedVolumeEvent(e, want)
-		if !match && m.Kind == "volume" && r.expected.Muted != nil && *r.expected.Muted {
+		if !match && m.Kind == heos.MutationKindVolume && r.expected.Muted != nil && *r.expected.Muted {
 			muted := false
 			want.Muted = &muted
 			match = confirmedVolumeEvent(e, want)
@@ -88,7 +88,7 @@ func (r *execution) acceptScalarEvent(e heos.Event) bool {
 		p.observed.Volume, p.observed.Muted = want.Volume, want.Muted
 		p.volumeSeen = true
 	case heos.EventRepeat:
-		if p == nil || p.command.Kind != "mode" {
+		if p == nil || p.command.Kind != heos.MutationKindMode {
 			return data.Repeat == r.expected.Repeat
 		}
 		if data.Repeat != p.command.Repeat {
@@ -96,7 +96,7 @@ func (r *execution) acceptScalarEvent(e heos.Event) bool {
 		}
 		p.observed.Repeat, p.repeatSeen = data.Repeat, true
 	case heos.EventShuffle:
-		if p == nil || p.command.Kind != "mode" {
+		if p == nil || p.command.Kind != heos.MutationKindMode {
 			return data.Shuffle == r.expected.Shuffle
 		}
 		if data.Shuffle != p.command.Shuffle {
@@ -113,7 +113,7 @@ func (r *execution) acceptScalarEvent(e heos.Event) bool {
 }
 
 type scalarReader interface {
-	RefreshScalars(context.Context, string) error
+	RefreshScalars(context.Context, heos.MutationKind) error
 }
 type scalarPublisher interface{ ConfirmScalars(heos.Snapshot) error }
 
@@ -123,7 +123,7 @@ func (c *Coordinator) confirmScalar(l *lane, r *execution, m heos.Mutation) (heo
 	// The terminal zero belongs to finishing playback, like the following
 	// Stop. Its acknowledgement may arrive after the envelope ends; no later
 	// positive volume is allowed. Other pending steps cannot extend playback.
-	finishing := m.Kind == "volume" && m.Level == 0 && !r.playbackDeadline.IsZero() && !c.clock.Now().Before(r.playbackDeadline)
+	finishing := m.Kind == heos.MutationKindVolume && m.Level == 0 && !r.playbackDeadline.IsZero() && !c.clock.Now().Before(r.playbackDeadline)
 	if !finishing && !r.playbackDeadline.IsZero() && r.playbackDeadline.Before(deadline) {
 		deadline = r.playbackDeadline
 		fallbackAt = deadline // A short remaining window must not trigger an early GET.
@@ -178,7 +178,7 @@ func (c *Coordinator) confirmScalar(l *lane, r *execution, m heos.Mutation) (heo
 	if c.logger != nil {
 		c.logger.Info("scalar confirmation event missing; reading requested controls", "operation_id", r.id, "command", m.Kind)
 	}
-	l.device.Metrics.Fallback(m.Kind)
+	l.device.Metrics.Fallback(string(m.Kind))
 	if err := reader.RefreshScalars(heos.WithObservationTrigger(ctx, "fallback"), m.Kind); err != nil {
 		return heos.Snapshot{}, err
 	}
@@ -197,13 +197,13 @@ func (c *Coordinator) confirmScalar(l *lane, r *execution, m heos.Mutation) (heo
 	if s.Stale || !s.Connected || s.Token.Generation != r.expected.Token.Generation {
 		return s, heos.ErrStale
 	}
-	if m.Kind == "mode" {
+	if m.Kind == heos.MutationKindMode {
 		if s.Repeat != m.Repeat || s.Shuffle != m.Shuffle {
 			return s, context.DeadlineExceeded
 		}
 	} else {
 		want := r.expected
-		if m.Kind == "volume" {
+		if m.Kind == heos.MutationKindVolume {
 			level := m.Level
 			want.Volume = &level
 			if want.Muted != nil && *want.Muted {

@@ -84,15 +84,15 @@ func FuzzQueueTransitionPolicy(f *testing.F) {
 		observed.Media = &last
 		origin := time.Date(2026, 9, 11, 7, 0, 0, 0, time.UTC)
 		flags := policyFuzzByte(data, 1)
-		state := queuePolicyState{Owned: flags&1 == 0, Automating: flags&2 == 0, ExpectedState: "play",
+		state := queuePolicyState{Owned: flags&1 == 0, Automating: flags&2 == 0, ExpectedState: heos.PlayStatePlay,
 			PlaybackUntil: origin.Add(time.Duration(policyFuzzByte(data, 2)%32) * time.Second)}
 		if flags&4 != 0 {
-			state.ExpectedState = "stop"
+			state.ExpectedState = heos.PlayStateStop
 		}
 		if flags&8 != 0 {
 			state.WaitUntil = origin.Add(12 * time.Second)
 		}
-		observed.State = [...]string{"play", "stop", "unknown", "pause"}[policyFuzzByte(data, 3)%4]
+		observed.State = [...]heos.PlayState{heos.PlayStatePlay, heos.PlayStateStop, heos.PlayStateUnknown, heos.PlayStatePause}[policyFuzzByte(data, 3)%4]
 		mediaCase := policyFuzzByte(data, 4) % 8
 		hybrid := mediaCase == 1 && n > 1
 		switch mediaCase {
@@ -152,16 +152,16 @@ func FuzzQueueTransitionPolicy(f *testing.F) {
 			t.Fatalf("event changed an existing wait: %+v", eventDecision)
 		}
 		if eventDecision.Action == queueWait {
-			if !state.Owned || !state.Automating || !state.WaitUntil.IsZero() || (event.Data().State != "stop" && event.Data().State != "unknown") ||
+			if !state.Owned || !state.Automating || !state.WaitUntil.IsZero() || (event.Data().State != heos.PlayStateStop && event.Data().State != heos.PlayStateUnknown) ||
 				eventDecision.WaitUntil != facts.Now.Add(12*time.Second) {
 				t.Fatalf("event started an unauthorized or unbounded wait: %+v", eventDecision)
 			}
 		}
-		if event.Data().State == "play" && state.ExpectedState != "play" && eventDecision.Action != queuePass {
+		if event.Data().State == heos.PlayStatePlay && state.ExpectedState != heos.PlayStatePlay && eventDecision.Action != queuePass {
 			t.Fatalf("unexpected Play bypassed ordinary attribution: %+v", eventDecision)
 		}
-		active := state.Owned && state.Automating && state.ExpectedState == "play"
-		pending := facts.Observed.State == "stop" || facts.Observed.State == "unknown" || facts.Observed.State == "play" && hybrid
+		active := state.Owned && state.Automating && state.ExpectedState == heos.PlayStatePlay
+		pending := facts.Observed.State == heos.PlayStateStop || facts.Observed.State == heos.PlayStateUnknown || facts.Observed.State == heos.PlayStatePlay && hybrid
 		waiting := !state.WaitUntil.IsZero() || active && pending
 		if !active || !waiting {
 			// Pass delegates to ordinary safety/attribution. It never authorizes
@@ -194,7 +194,7 @@ func FuzzQueueTransitionPolicy(f *testing.F) {
 				if d.Action != queueRelease || !errors.Is(d.Err, facts.Unsafe) {
 					t.Fatalf("unsafe observation confirmed/waited: %+v", d)
 				}
-			case controls != 0 || queueEdit || observed.State == "pause" || mediaCase == 2 || mediaCase == 4 || observed.State == "play" && (mediaCase == 3 || mediaCase == 1 && n == 1):
+			case controls != 0 || queueEdit || observed.State == heos.PlayStatePause || mediaCase == 2 || mediaCase == 4 || observed.State == heos.PlayStatePlay && (mediaCase == 3 || mediaCase == 1 && n == 1):
 				if d.Action != queueRelease || !errors.Is(d.Err, ErrOwnership) {
 					t.Fatalf("queue/control/identity intervention accepted: %+v", d)
 				}
@@ -206,7 +206,7 @@ func FuzzQueueTransitionPolicy(f *testing.F) {
 			}
 		}
 		// Always exercise a positive owned transition with the generated queue.
-		state = queuePolicyState{Owned: true, Automating: true, ExpectedState: "play", WaitUntil: origin.Add(12 * time.Second), PlaybackUntil: origin.Add(20 * time.Second)}
+		state = queuePolicyState{Owned: true, Automating: true, ExpectedState: heos.PlayStatePlay, WaitUntil: origin.Add(12 * time.Second), PlaybackUntil: origin.Add(20 * time.Second)}
 		settled := policyFuzzCopy(before)
 		media := settled.Queue.Items[n-1]
 		settled.Media = &media
@@ -225,7 +225,7 @@ func FuzzQueueTransitionPolicy(f *testing.F) {
 func policyFuzzTransitionHints(t *testing.T, data []byte, before heos.Snapshot) {
 	t.Helper()
 	origin := time.Date(2026, 9, 11, 7, 0, 0, 0, time.UTC)
-	state := queuePolicyState{Owned: true, Automating: true, ExpectedState: "play", PlaybackUntil: origin.Add(time.Duration(1+policyFuzzByte(data, 2)%24) * time.Second)}
+	state := queuePolicyState{Owned: true, Automating: true, ExpectedState: heos.PlayStatePlay, PlaybackUntil: origin.Add(time.Duration(1+policyFuzzByte(data, 2)%24) * time.Second)}
 	first := checkedQueueEvent(t, state, policyFuzzEvent(policyFuzzByte(data, 3)%2), origin)
 	if first.Action != queueWait || first.WaitUntil != origin.Add(12*time.Second) || !first.Notify {
 		t.Fatalf("initial Stop/unknown did not start a bounded read-only wait: %+v", first)
@@ -250,9 +250,9 @@ func policyFuzzTransitionHints(t *testing.T, data []byte, before heos.Snapshot) 
 		facts.PendingEvents = code&128 != 0
 		switch (code >> 5) % 3 {
 		case 0:
-			facts.Observed.State = "stop"
+			facts.Observed.State = heos.PlayStateStop
 		case 1:
-			facts.Observed.State = "unknown"
+			facts.Observed.State = heos.PlayStateUnknown
 		case 2:
 			if len(before.Queue.Items) > 1 {
 				facts.Observed.Media.QueueID = before.Queue.Items[len(before.Queue.Items)-1].QueueID

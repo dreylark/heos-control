@@ -30,7 +30,7 @@ func persistedDiagnostics(t *testing.T, op journal.Operation) map[string]any {
 func TestHistoryRetainsFirstEventEvidence(t *testing.T) {
 	c, j, d, req, cmd := automationFixture(t)
 	d.before = func(m heos.Mutation) {
-		if m.Kind == "queue" {
+		if m.Kind == heos.MutationKindQueue {
 			d.handler(heos.Event{Command: "event/player_state_changed", Params: url.Values{"pid": {"1"}, "state": {"pause"}, "text": {"private-marker"}}})
 			d.handler(heos.Event{Gap: true})
 		}
@@ -77,7 +77,7 @@ func TestHistoryEventEvidenceIsImmutableAndPartial(t *testing.T) {
 	defer cancel(nil)
 	volume, mute := 10, false
 	r := &execution{ctx: ctx, cancel: cancel, phase: "holding", now: func() time.Time { return at },
-		expected: heos.Snapshot{Player: heos.Player{ID: "1"}, State: "play", Volume: &volume, Muted: &mute}}
+		expected: heos.Snapshot{Player: heos.Player{ID: "1"}, State: heos.PlayStatePlay, Volume: &volume, Muted: &mute}}
 	event := heos.Event{Command: "event/player_volume_changed", Params: url.Values{"pid": {"1"}, "level": {"13"}, "mute": {"off"}}}
 	r.event(event)
 	event.Params.Set("level", "99")
@@ -222,7 +222,7 @@ func TestHistoryNamesDeviceRejectionWithoutChangingClassification(t *testing.T) 
 			c, j, d, req := fixtureCoordinator(t)
 			rejected := &heos.DeviceError{Command: "player/set_volume", Code: tc.code, Text: "private-media-marker"}
 			c.lanes["room"].writer = historyRejectedWriter{fakeDevice: d, err: fmt.Errorf("send control: %w", &heos.CommandError{Delivery: heos.Rejected, Cause: rejected})}
-			a, err := c.Submit(context.Background(), req, Command{Kind: "volume", Level: 10})
+			a, err := c.Submit(context.Background(), req, Command{Kind: CommandKindVolume, Level: 10})
 			if err != nil {
 				t.Fatal(err)
 			}

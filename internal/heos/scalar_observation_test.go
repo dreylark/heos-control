@@ -42,7 +42,7 @@ func TestScalarWriteEventsKeepObservationContinuous(t *testing.T) {
 			}
 			before, count := o.Snapshot(), reads.Load()
 			guard := Guard{Token: before.Token, ExpiresAt: time.Now().Add(time.Second)}
-			if _, err := c.Write(context.Background(), Mutation{Kind: "volume", Player: before.Player.ID, Level: 20}, guard); err != nil {
+			if _, err := c.Write(context.Background(), Mutation{Kind: MutationKindVolume, Player: before.Player.ID, Level: 20}, guard); err != nil {
 				t.Fatal(err)
 			}
 			if timing != "missing-event" {
@@ -64,7 +64,7 @@ func TestScalarWriteEventsKeepObservationContinuous(t *testing.T) {
 			if reads.Load() != count || len(o.wake) != 0 {
 				t.Fatal("scalar write scheduled hidden full read", reads.Load(), len(o.wake))
 			}
-			if _, err := c.Write(context.Background(), Mutation{Kind: "volume", Player: before.Player.ID, Level: 21}, guard); !errors.Is(err, ErrStale) {
+			if _, err := c.Write(context.Background(), Mutation{Kind: MutationKindVolume, Player: before.Player.ID, Level: 21}, guard); !errors.Is(err, ErrStale) {
 				t.Fatal("consumed prewrite guard remained reusable", err)
 			}
 		})
@@ -104,7 +104,7 @@ func TestProgressAndDuplicateEventsDuringScalarPublication(t *testing.T) {
 				t.Fatal(err)
 			}
 			confirmed, count := o.Snapshot(), reads.Load()
-			if _, err := c.Write(context.Background(), Mutation{Kind: "volume", Player: confirmed.Player.ID, Level: 20}, Guard{Token: confirmed.Token, ExpiresAt: time.Now().Add(time.Second)}); err != nil {
+			if _, err := c.Write(context.Background(), Mutation{Kind: MutationKindVolume, Player: confirmed.Player.ID, Level: 20}, Guard{Token: confirmed.Token, ExpiresAt: time.Now().Add(time.Second)}); err != nil {
 				t.Fatal(err)
 			}
 			next := func() Event {
@@ -182,9 +182,9 @@ func TestModeEventsConfirmOnlyChangedFields(t *testing.T) {
 				t.Fatal(err)
 			}
 			before, count := o.Snapshot(), reads.Load()
-			m := Mutation{Kind: "mode", Player: before.Player.ID, Repeat: "off", Shuffle: true}
+			m := Mutation{Kind: MutationKindMode, Player: before.Player.ID, Repeat: RepeatOff, Shuffle: true}
 			if scenario == "repeat" || scenario == "both" {
-				m.Repeat = "on_all"
+				m.Repeat = RepeatOnAll
 			}
 			if scenario == "shuffle" || scenario == "both" {
 				m.Shuffle = false
@@ -219,8 +219,8 @@ func TestModeEventsConfirmOnlyChangedFields(t *testing.T) {
 }
 
 func TestScalarFallbackReadsOnlyChangedControls(t *testing.T) {
-	for _, kind := range []string{"volume", "mute", "mode"} {
-		t.Run(kind, func(t *testing.T) {
+	for _, kind := range []MutationKind{MutationKindVolume, MutationKindMute, MutationKindMode} {
+		t.Run(string(kind), func(t *testing.T) {
 			var changed atomic.Bool
 			var reads atomic.Int32
 			server := newFakeHEOS(t, func(c net.Conn, u *url.URL, _ int64) {
@@ -256,7 +256,7 @@ func TestScalarFallbackReadsOnlyChangedControls(t *testing.T) {
 				t.Fatal(err)
 			}
 			before, count := o.Snapshot(), reads.Load()
-			if _, err := c.Write(context.Background(), Mutation{Kind: kind, Player: before.Player.ID, Level: 20, Muted: true, Repeat: "on_all"}, Guard{Token: before.Token, ExpiresAt: time.Now().Add(time.Second)}); err != nil {
+			if _, err := c.Write(context.Background(), Mutation{Kind: kind, Player: before.Player.ID, Level: 20, Muted: true, Repeat: RepeatOnAll}, Guard{Token: before.Token, ExpiresAt: time.Now().Add(time.Second)}); err != nil {
 				t.Fatal(err)
 			}
 			if !o.Snapshot().Stale {
@@ -269,7 +269,7 @@ func TestScalarFallbackReadsOnlyChangedControls(t *testing.T) {
 			want := int32(2)
 			if kind == "mode" {
 				want = 1
-				if s.Repeat != "on_all" || s.Shuffle || *s.Volume != *before.Volume {
+				if s.Repeat != RepeatOnAll || s.Shuffle || *s.Volume != *before.Volume {
 					t.Fatal("mode read changed unrelated volume", s)
 				}
 			} else if *s.Volume != 20 || !*s.Muted || s.Repeat != before.Repeat || s.Shuffle != before.Shuffle {
@@ -297,7 +297,7 @@ func TestScalarFallbackCannotRepairMissingHistory(t *testing.T) {
 			if err := o.Refresh(context.Background()); err != nil {
 				t.Fatal(err)
 			}
-			count, kind := reads.Load(), "volume"
+			count, kind := reads.Load(), MutationKindVolume
 			switch fault {
 			case "missing-event":
 				c.event(Response{Command: "event/player_state_changed", Params: url.Values{"pid": {"9007199254740993"}, "state": {"stop"}}})
@@ -395,7 +395,7 @@ func TestUnchangedScalarWriteCanUseExplicitConfirmation(t *testing.T) {
 		t.Fatal(err)
 	}
 	confirmed, count := o.Snapshot(), reads.Load()
-	r, err := c.Write(context.Background(), Mutation{Kind: "volume", Player: confirmed.Player.ID, Level: *confirmed.Volume}, Guard{Token: confirmed.Token, ExpiresAt: time.Now().Add(time.Second)})
+	r, err := c.Write(context.Background(), Mutation{Kind: MutationKindVolume, Player: confirmed.Player.ID, Level: *confirmed.Volume}, Guard{Token: confirmed.Token, ExpiresAt: time.Now().Add(time.Second)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -445,7 +445,7 @@ func TestScalarFallbackCannotOverwriteConcurrentEvents(t *testing.T) {
 			c.SetEventHandler(o.Notify)
 			before, count := o.Snapshot(), reads.Load()
 			fallback.Store(true)
-			if err := o.RefreshScalars(context.Background(), "volume"); err == nil {
+			if err := o.RefreshScalars(context.Background(), MutationKindVolume); err == nil {
 				t.Fatal("inconsistent scalar read succeeded")
 			}
 			s := o.Snapshot()
@@ -619,7 +619,7 @@ func TestPlaybackFallbackPreservesConfirmedQueueAndAuditAge(t *testing.T) {
 				want, wantErr = 0, true
 			case "write-pending":
 				c.mu.Lock()
-				c.writes[before.Player.ID] = playerWrite{revision: 1, mutation: Mutation{Kind: "volume"}}
+				c.writes[before.Player.ID] = playerWrite{revision: 1, mutation: Mutation{Kind: MutationKindVolume}}
 				c.mu.Unlock()
 				want, wantErr = 0, true
 			case "gap":
@@ -643,7 +643,7 @@ func TestPlaybackFallbackPreservesConfirmedQueueAndAuditAge(t *testing.T) {
 			if (want < 8 && s.ObservedAt != before.ObservedAt) || len(s.Queue.Items) != len(before.Queue.Items) || s.Queue.Items[0] != before.Queue.Items[0] {
 				t.Fatal("playback fallback renewed queue/full audit evidence", s)
 			}
-			if !wantErr && (s.Stale || s.EventUpdated != (want < 8) || s.State != "play" || s.Media.ID != "track-1") {
+			if !wantErr && (s.Stale || s.EventUpdated != (want < 8) || s.State != PlayStatePlay || s.Media.ID != "track-1") {
 				t.Fatal("playback fallback did not supply state and metadata", s)
 			}
 		})

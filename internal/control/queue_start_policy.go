@@ -42,7 +42,7 @@ func decideQueueStart(f queueStartFacts) queueStartDecision {
 	// The unknown MID in the incident is not evidence of selected playback.
 	// Before the first Play only, a complete selected queue permits read-only
 	// waiting for local metadata to settle (Denon 4.2.3, 4.2.5 and 4.2.15).
-	unresolved := f.Phase == queueAwaitingPlay && f.Observed.State == "unknown" &&
+	unresolved := f.Phase == queueAwaitingPlay && f.Observed.State == heos.PlayStateUnknown &&
 		f.Observed.Media != nil && f.Observed.Media.Source == "1024" && f.Observed.Media.ID != "" &&
 		!mediaAllowed && completeOwnedQueue(f.Observed.Queue, f.Members)
 	for _, rule := range []struct {
@@ -60,7 +60,7 @@ func decideQueueStart(f queueStartFacts) queueStartDecision {
 		{"queue_state_changed", !queueStatePending(f.Before.State, f.Observed.State, f.Phase == queuePlayObserved), queueStartAbort, nil, []string{"state"}},
 		{"queue_items_changed", !queueLoadingItems(f.Before.Queue, f.Observed.Queue, f.Members), queueStartAbort, nil, []string{"queue_items"}},
 		{"queue_media_changed", !mediaAllowed && !unresolved, queueStartAbort, nil, []string{"media"}},
-		{"queue_start_confirmed", f.Observed.State == "play" && queueResultProblem(f.Observed, f.Members, f.Bounded) == "" && !f.PendingEvents, queueStartConfirm, nil, nil},
+		{"queue_start_confirmed", f.Observed.State == heos.PlayStatePlay && queueResultProblem(f.Observed, f.Members, f.Bounded) == "" && !f.PendingEvents, queueStartConfirm, nil, nil},
 		{"events_pending", f.PendingEvents, queueStartWait, nil, nil},
 		{"loading_media_pending", unresolved, queueStartWait, nil, nil},
 	} {

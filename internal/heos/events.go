@@ -34,10 +34,10 @@ const (
 type EventData struct {
 	Kind        EventKind
 	Player      ID
-	State       string
+	State       PlayState
 	Volume      int
 	Muted       bool
-	Repeat      string
+	Repeat      Repeat
 	Shuffle     bool
 	HasVolume   bool
 	HasMute     bool
@@ -90,8 +90,8 @@ func decodeEventData(command string, params url.Values) EventData {
 		d.Valid = true
 	case EventState:
 		// Home 150 reports unknown during loading; see docs/DEVICE_COMPATIBILITY.md.
-		d.State = choice("state", "play", "pause", "stop", "unknown")
-		d.Valid = d.Player != "" && d.State != ""
+		d.State = PlayState(choice("state", string(PlayStatePlay), string(PlayStatePause), string(PlayStateStop), string(PlayStateUnknown)))
+		d.Valid = d.Player != "" && d.State != PlayStateAbsent
 	case EventNowPlaying, EventQueue:
 		d.Valid = d.Player != ""
 	case EventProgress:
@@ -119,8 +119,8 @@ func decodeEventData(command string, params url.Values) EventData {
 		}
 		d.Valid = identity && d.HasVolume && d.HasMute
 	case EventRepeat:
-		d.Repeat = choice("repeat", "off", "on_one", "on_all")
-		d.Valid = d.Player != "" && d.Repeat != ""
+		d.Repeat = Repeat(choice("repeat", string(RepeatOff), string(RepeatOnOne), string(RepeatOnAll)))
+		d.Valid = d.Player != "" && d.Repeat != RepeatAbsent
 	case EventShuffle:
 		if shuffle := choice("shuffle", "on", "off"); shuffle != "" {
 			d.Shuffle, d.HasShuffle = shuffle == "on", true

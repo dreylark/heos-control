@@ -16,11 +16,11 @@ import (
 )
 
 func TestQueueTransitionHybridMediaPreservesOtherControls(t *testing.T) {
-	for _, state := range []string{"stop", "unknown", "play"} {
+	for _, state := range []heos.PlayState{heos.PlayStateStop, heos.PlayStateUnknown, heos.PlayStatePlay} {
 		for _, field := range []string{"queue_items", "volume", "mute", "grouped", "connection_generation"} {
-			t.Run(state+"/"+field, func(t *testing.T) {
+			t.Run(string(state)+"/"+field, func(t *testing.T) {
 				volume, muted, total := 10, false, 2
-				before := heos.Snapshot{State: "play", Volume: &volume, Muted: &muted,
+				before := heos.Snapshot{State: heos.PlayStatePlay, Volume: &volume, Muted: &muted,
 					Token: heos.Token{Generation: 1}, Media: &heos.Media{Source: "1024", ID: "first", QueueID: "1"},
 					Queue: heos.QueuePage{Total: &total, Items: []heos.Media{{ID: "first", QueueID: "1"}, {ID: "second", QueueID: "2"}}}}
 				after := before
@@ -72,7 +72,7 @@ func TestQueueTransitionPersistentHybridMediaKeepsDeadlines(t *testing.T) {
 				d.mu.Lock()
 				if !started {
 					started, writesAtStop = true, len(d.writes)
-					d.s.State = tc.state
+					d.s.State = heos.PlayState(tc.state)
 					media := d.tracks[0]
 					media.QueueID = d.tracks[1].QueueID
 					d.s.Media = &media
@@ -170,7 +170,7 @@ func TestActivePlayTransitionPreservesEnvelope(t *testing.T) {
 				if !progress.StopAt.Equal(began.Add(duration)) || clock.Now().Sub(began) != duration {
 					t.Fatal("transition shifted the original deadline", progress)
 				}
-				if *d.s.Volume != 0 || d.s.State != "stop" {
+				if *d.s.Volume != 0 || d.s.State != heos.PlayStateStop {
 					t.Fatal("transition prevented fade/Stop", d.s)
 				}
 			})
@@ -203,7 +203,7 @@ func TestActivePlayTransitionRejectsIntervention(t *testing.T) {
 					intervened = true
 					switch scenario {
 					case "pause":
-						d.s.State = "pause"
+						d.s.State = heos.PlayStatePause
 						event.Command, event.Params = "event/player_state_changed", url.Values{"pid": {"1"}, "state": {"pause"}}
 					case "volume", "mute":
 						event.Command, event.Params = "event/player_volume_changed", url.Values{"pid": {"1"}, "level": {"11"}, "mute": {"off"}}
@@ -348,9 +348,9 @@ func TestActiveQueueTransition(t *testing.T) {
 				if !started {
 					started = true
 					writesAtStop = len(d.writes)
-					d.s.State = "stop"
+					d.s.State = heos.PlayStateStop
 					if scenario == "unknown" || scenario == "hybrid-unknown" {
-						d.s.State = "unknown"
+						d.s.State = heos.PlayStateUnknown
 					}
 					if scenario == "hybrid-stop" || scenario == "hybrid-unknown" || scenario == "hybrid-play" {
 						// Home 150 can expose the old MID with the next QID during
@@ -388,14 +388,14 @@ func TestActiveQueueTransition(t *testing.T) {
 						m.ID = "outside-owned-queue"
 						d.s.Media = &m
 					case "hybrid-play":
-						d.s.State = "play"
+						d.s.State = heos.PlayStatePlay
 					case "generation":
 						d.s.Token.Generation++
 					}
 				}
 				if !resumed && elapsed >= 7*time.Second && (scenario == "next" || scenario == "missing-play-event" || scenario == "unknown" || scenario == "hybrid-stop" || scenario == "hybrid-unknown") {
 					resumed = true
-					d.s.State = "play"
+					d.s.State = heos.PlayStatePlay
 					m := d.tracks[1]
 					d.s.Media = &m
 					if scenario == "next" {
@@ -464,7 +464,7 @@ func TestTransportRetriesOnlyStaleReadback(t *testing.T) {
 		}
 		return nil
 	}}
-	a, err := c.Submit(context.Background(), req, Command{Kind: "transport", State: "stop"})
+	a, err := c.Submit(context.Background(), req, Command{Kind: CommandKindTransport, State: heos.PlayStateStop})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -486,7 +486,7 @@ func TestQueueTransitionOverlapsVolumeCommand(t *testing.T) {
 			interrupt := func() {
 				started = true
 				d.mu.Lock()
-				d.s.State = "unknown"
+				d.s.State = heos.PlayStateUnknown
 				m := d.tracks[0]
 				m.QueueID = d.tracks[1].QueueID
 				d.s.Media = &m
@@ -495,7 +495,7 @@ func TestQueueTransitionOverlapsVolumeCommand(t *testing.T) {
 			}
 
 			d.before = func(m heos.Mutation) {
-				if m.Kind != "volume" || clock.Now().Sub(began) >= 10*time.Second {
+				if m.Kind != heos.MutationKindVolume || clock.Now().Sub(began) >= 10*time.Second {
 					return
 				}
 				if started && !resumed {
@@ -518,7 +518,7 @@ func TestQueueTransitionOverlapsVolumeCommand(t *testing.T) {
 				if started && !resumed && clock.Now().Sub(began) >= 7*time.Second {
 					resumed = true
 					d.mu.Lock()
-					d.s.State = "play"
+					d.s.State = heos.PlayStatePlay
 					m := d.tracks[1]
 					d.s.Media = &m
 					d.mu.Unlock()
@@ -551,12 +551,12 @@ func (c *transitionHeldClock) Wait(ctx context.Context, d time.Duration, wake <-
 }
 
 func TestOperatorStopPreemptsQueueTransitionWait(t *testing.T) {
-	for _, state := range []string{"stop", "play"} {
-		t.Run(state, func(t *testing.T) { operatorStopPreemptsQueueTransitionWait(t, state) })
+	for _, state := range []heos.PlayState{heos.PlayStateStop, heos.PlayStatePlay} {
+		t.Run(string(state), func(t *testing.T) { operatorStopPreemptsQueueTransitionWait(t, state) })
 	}
 }
 
-func operatorStopPreemptsQueueTransitionWait(t *testing.T, state string) {
+func operatorStopPreemptsQueueTransitionWait(t *testing.T, state heos.PlayState) {
 	t.Helper()
 	c, j, d, req, cmd := albumFixture(t)
 	clock := &transitionHeldClock{advancingClock: &advancingClock{now: time.Now()}, entered: make(chan struct{})}
@@ -569,13 +569,13 @@ func operatorStopPreemptsQueueTransitionWait(t *testing.T, state string) {
 		changed = true
 		d.mu.Lock()
 		d.s.State = state
-		if state == "play" {
+		if state == heos.PlayStatePlay {
 			m := d.tracks[0]
 			m.QueueID = d.tracks[1].QueueID
 			d.s.Media = &m
 		}
 		d.mu.Unlock()
-		if state == "play" {
+		if state == heos.PlayStatePlay {
 			d.handler(heos.Event{Command: "event/player_now_playing_changed", Params: url.Values{"pid": {"1"}}})
 		} else {
 			d.handler(heos.Event{Command: "event/player_state_changed", Params: url.Values{"pid": {"1"}, "state": {"stop"}}})
@@ -591,7 +591,7 @@ func operatorStopPreemptsQueueTransitionWait(t *testing.T, state string) {
 		t.Fatal("transition wait not reached")
 	}
 	req.Key, req.IfMatch, req.Endpoint, req.Body = "stop", "", "/v1/players/room/stop", json.RawMessage(`{"fade_seconds":0}`)
-	b, err := c.Submit(context.Background(), req, Command{Kind: "stop"})
+	b, err := c.Submit(context.Background(), req, Command{Kind: CommandKindStop})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -603,7 +603,7 @@ func operatorStopPreemptsQueueTransitionWait(t *testing.T, state string) {
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if len(d.writes) != 5 || d.writes[4].State != "stop" {
+	if len(d.writes) != 5 || d.writes[4].State != heos.PlayStateStop {
 		t.Fatal("unexpected writes", d.writes)
 	}
 }

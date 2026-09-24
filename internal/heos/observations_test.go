@@ -51,14 +51,14 @@ func TestIdentityAndSnapshotFreshness(t *testing.T) {
 	}
 	now := time.Now()
 	o.now = func() time.Time { return now }
-	if snapshot := o.Snapshot(); !snapshot.Stale || snapshot.State != "unknown" || snapshot.Volume != nil {
+	if snapshot := o.Snapshot(); !snapshot.Stale || snapshot.State != PlayStateUnknown || snapshot.Volume != nil {
 		t.Fatal(snapshot)
 	}
 	if err := o.Refresh(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	snapshot := o.Snapshot()
-	if snapshot.Stale || !snapshot.Verified || snapshot.Player.ID != "9007199254740993" || snapshot.State != "pause" || snapshot.Repeat != "off" || !snapshot.Shuffle || snapshot.Grouped || snapshot.Volume == nil || *snapshot.Volume != 12 || len(snapshot.Queue.Items) != 1 {
+	if snapshot.Stale || !snapshot.Verified || snapshot.Player.ID != "9007199254740993" || snapshot.State != PlayStatePause || snapshot.Repeat != RepeatOff || !snapshot.Shuffle || snapshot.Grouped || snapshot.Volume == nil || *snapshot.Volume != 12 || len(snapshot.Queue.Items) != 1 {
 		t.Fatalf("snapshot %+v", snapshot)
 	}
 	*snapshot.Volume = 90
@@ -128,7 +128,7 @@ func TestDuplicateIdentityAndUnknownState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := o.Refresh(context.Background()); err != nil || o.Snapshot().State != "unknown" {
+	if err := o.Refresh(context.Background()); err != nil || o.Snapshot().State != PlayStateUnknown {
 		t.Fatal(o.Snapshot(), err)
 	}
 }

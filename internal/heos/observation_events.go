@@ -81,9 +81,9 @@ const (
 
 func changedWriteFields(s Snapshot, m Mutation) observedFields {
 	switch m.Kind {
-	case "volume", "mute":
+	case MutationKindVolume, MutationKindMute:
 		return observedVolume
-	case "mode":
+	case MutationKindMode:
 		var fields observedFields
 		if s.Repeat != m.Repeat {
 			fields |= observedRepeat
@@ -120,7 +120,7 @@ func applyObservedEvent(s *Snapshot, e Event) bool {
 	switch d.Kind {
 	case EventState:
 		s.State = d.State
-		if d.State == "stop" || d.State == "unknown" {
+		if d.State == PlayStateStop || d.State == PlayStateUnknown {
 			s.MediaStale = true
 			s.Playhead = nil
 		}
@@ -166,7 +166,7 @@ func (o *Observer) refreshMedia(ctx context.Context, s Snapshot) (err error) {
 		return ErrStale
 	}
 	s.Media = &media
-	s.MediaStale = s.State != "play" && s.State != "pause"
+	s.MediaStale = !s.State.Active()
 	s.Playhead = o.playheadForMedia(s.Media, s.State)
 	s.EventUpdated = true
 	o.last = s
@@ -196,7 +196,7 @@ func (o *Observer) progressRecordable(s *Snapshot, player ID, token Token) bool 
 	if o.invalid || o.mediaPending || s.MediaStale || s.Media == nil || player == "" || player != s.Player.ID {
 		return false
 	}
-	if s.State != "play" && s.State != "pause" {
+	if !s.State.Active() {
 		return false
 	}
 	view := o.client.PlayerView(s.Player.ID)
@@ -210,10 +210,10 @@ func (o *Observer) progressRecordable(s *Snapshot, player ID, token Token) bool 
 // Called with o.mu held when publishing a targeted read. A changed media
 // identity also fences queued samples, even if no control event changed Token.
 // Same-identity reads retain the latest sample accepted while the read ran.
-func (o *Observer) playheadForMedia(media *Media, state string) *Playhead {
+func (o *Observer) playheadForMedia(media *Media, state PlayState) *Playhead {
 	old := o.last.Media
 	if old == nil || media == nil || old.Source != media.Source || old.ID != media.ID || old.QueueID != media.QueueID ||
-		(o.last.State != "play" && o.last.State != "pause") || (state != "play" && state != "pause") {
+		!o.last.State.Active() || !state.Active() {
 		o.progressAfter = o.client.progressSequence.Load()
 		return nil
 	}

@@ -30,7 +30,7 @@ func TestSkipWaitsForHybridMediaToSettle(t *testing.T) {
 				settled := d.tracks[1]
 				d.s.Media = &settled
 			}
-			a, err := c.Submit(context.Background(), skipRequest(c, req), Command{Kind: "skip", Direction: "next"})
+			a, err := c.Submit(context.Background(), skipRequest(c, req), Command{Kind: CommandKindSkip, Direction: "next"})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -57,7 +57,7 @@ func TestSkipRejectsForeignTransitionIdentifiers(t *testing.T) {
 				media.QueueID = "foreign"
 			}
 			skipStartsWithMedia(d, media)
-			a, err := c.Submit(context.Background(), skipRequest(c, req), Command{Kind: "skip", Direction: "next"})
+			a, err := c.Submit(context.Background(), skipRequest(c, req), Command{Kind: CommandKindSkip, Direction: "next"})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -83,7 +83,7 @@ func TestSkipHybridMediaAndDuplicateEventsKeepOriginalDeadline(t *testing.T) {
 		}
 	}
 	began := clock.Now()
-	a, err := c.Submit(context.Background(), skipRequest(c, req), Command{Kind: "skip", Direction: "next"})
+	a, err := c.Submit(context.Background(), skipRequest(c, req), Command{Kind: CommandKindSkip, Direction: "next"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +120,7 @@ func TestSkipConfirmationReconcilesEventsAfterSnapshot(t *testing.T) {
 					}
 				}
 				began := clock.Now()
-				a, err := c.Submit(context.Background(), skipRequest(c, req), Command{Kind: "skip", Direction: "next"})
+				a, err := c.Submit(context.Background(), skipRequest(c, req), Command{Kind: CommandKindSkip, Direction: "next"})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -151,7 +151,7 @@ func TestSkipConfirmedReadbackClosesTransitionExpectations(t *testing.T) {
 	defer cancel(context.Canceled)
 	r := &execution{ctx: ctx, cancel: cancel, now: c.clock.Now, expected: before,
 		wake: make(chan struct{}, 1), events: map[string][]map[string]string{}}
-	m := heos.Mutation{Kind: "skip", Direction: "next"}
+	m := heos.Mutation{Kind: heos.MutationKindSkip, Direction: "next"}
 	r.expect(m)
 	d.sent = true
 	next := d.tracks[1]
@@ -190,7 +190,7 @@ func TestSkipReadbackRequiresCurrentFullEventCoverage(t *testing.T) {
 			defer cancel(context.Canceled)
 			r := &execution{ctx: ctx, cancel: cancel, now: c.clock.Now, expected: after,
 				events: map[string][]map[string]string{}, eventRevision: 1}
-			r.expect(heos.Mutation{Kind: "skip", Direction: "next"})
+			r.expect(heos.Mutation{Kind: heos.MutationKindSkip, Direction: "next"})
 			switch tc.name {
 			case "older token":
 				after.Token.Player = 1
@@ -225,7 +225,7 @@ func skipStartsWithMedia(d *skipDevice, media heos.Media) {
 	before := d.before
 	d.before = func(m heos.Mutation) {
 		before(m)
-		if m.Kind == "skip" {
+		if m.Kind == heos.MutationKindSkip {
 			d.mu.Lock()
 			d.s.Media = &media
 			d.mu.Unlock()
