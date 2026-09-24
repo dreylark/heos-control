@@ -208,8 +208,8 @@ func TestPlayheadFollowsMediaIdentity(t *testing.T) {
 	if err := o.Refresh(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if s := o.Snapshot(); s.Playhead != nil || s.Stale || s.Media.ID != "track-2" {
-		t.Fatalf("full observation kept a playhead: %+v", s.Playhead)
+	if s := o.Snapshot(); s.Playhead == nil || s.Playhead.PositionMS != 6 || s.Stale || s.Media.ID != "track-2" {
+		t.Fatalf("full observation dropped the current playhead: %+v", s.Playhead)
 	}
 }
 
