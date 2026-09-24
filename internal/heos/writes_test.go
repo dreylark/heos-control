@@ -99,7 +99,7 @@ func TestWriteRevisionStorageRequiresObservedPlayer(t *testing.T) {
 func TestMutationWireAllowlistAndDisabledGate(t *testing.T) {
 	// Denon 4.2.4/7/11/14, 4.2.21/4.2.22 and 4.4.11/12: absolute values, aid=4,
 	// playable containers versus tracks; no raw URL, toggle or queue-edit endpoint.
-	for _, m := range []Mutation{{Kind: "volume", Player: "1", Level: 101}, {Kind: "transport", Player: "1", State: "toggle"}, {Kind: "skip", Player: "1", Direction: "toggle"}, {Kind: "mode", Player: "1", Repeat: "yes"}, {Kind: "queue", Player: "1", Item: Item{Container: "yes", Playable: "no", ContainerID: "album"}}, {Kind: "reboot", Player: "1"}} {
+	for _, m := range []Mutation{{Kind: "volume", Player: "1", Level: 101}, {Kind: "transport", Player: "1", State: "toggle"}, {Kind: "skip", Player: "1", Direction: "toggle"}, {Kind: "mode", Player: "1", Repeat: "yes"}, {Kind: "queue", Player: "1", Item: Item{Container: "yes", Playable: "no"}}, {Kind: "reboot", Player: "1"}} {
 		if _, _, e := m.command(); e == nil {
 			t.Fatalf("accepted invalid mutation %+v", m)
 		}
@@ -110,7 +110,7 @@ func TestMutationWireAllowlistAndDisabledGate(t *testing.T) {
 			t.Fatal(name, args, err)
 		}
 	}
-	m := Mutation{Kind: MutationKindQueue, Player: "1", Item: Item{Source: "900", ContainerID: "Album/+%&", Container: "yes", Playable: "yes"}}
+	m := Mutation{Kind: MutationKindQueue, Player: "1", Item: Item{Source: "900", ContainerID: "Album/+%&", Container: "yes", Playable: "no"}}
 	name, args, e := m.command()
 	if e != nil || name != "browse/add_to_queue" || args.Get("aid") != "4" || args.Get("cid") != "Album/+%&" {
 		t.Fatal(name, args, e)

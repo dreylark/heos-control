@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -43,8 +44,16 @@ func TestPlaybackWireOrderReadbackAndReplay(t *testing.T) {
 		volumeIntervention                            bool
 		hybridMedia                                   bool
 		loadingMID                                    string
+		nonPlayableContainer                          bool
+		invalidMember                                 string
 	}{
 		{name: "plain"},
+		{name: "non-playable-container", nonPlayableContainer: true},
+		{name: "non-playable-container-bounded", nonPlayableContainer: true, bounded: true},
+		{name: "non-playable-container-empty", nonPlayableContainer: true, invalidMember: "empty"},
+		{name: "non-playable-container-unplayable-leaf", nonPlayableContainer: true, invalidMember: "unplayable"},
+		{name: "non-playable-container-missing-mid", nonPlayableContainer: true, invalidMember: "missing-mid"},
+		{name: "non-playable-container-non-song-leaf", nonPlayableContainer: true, invalidMember: "non-song"},
 		{name: "missing-volume-event", missingVolumeEvent: true},
 		{name: "missing-volume-event-auto-unmute", missingVolumeEvent: true, volumeUnmutes: true},
 		{name: "missing-volume-event-unchanged", missingVolumeEvent: true, ignoreVolume: true},
@@ -290,14 +299,34 @@ func TestPlaybackWireOrderReadbackAndReplay(t *testing.T) {
 								if params.Get("sid") == "1024" {
 									payload = []map[string]any{{"sid": 900, "name": "Gerbera", "type": "heos_server"}}
 								} else {
-									payload = []map[string]any{{"cid": "green", "name": "Green", "container": "yes", "playable": "yes"}}
+									playable := "yes"
+									if tc.nonPlayableContainer {
+										playable = "no"
+									}
+									payload = []map[string]any{{"cid": "green", "name": "Green", "container": "yes", "playable": playable}}
 									if params.Get("cid") == "green" {
-										payload = []map[string]any{{"mid": "track", "name": "Song", "type": "song", "container": "no", "playable": "yes"}}
-										if tc.multi {
-											payload = append(payload.([]map[string]any), map[string]any{"mid": "track-next", "name": "Next song", "type": "song", "container": "no", "playable": "yes"})
-											params.Set("count", "2")
-											params.Set("returned", "2")
+										member := map[string]any{"mid": "track", "name": "Song", "type": "song", "container": "no", "playable": "yes"}
+										switch tc.invalidMember {
+										case "unplayable":
+											member["playable"] = "no"
+										case "missing-mid":
+											delete(member, "mid")
+										case "non-song":
+											member["type"] = "station"
 										}
+										members := []map[string]any{member}
+										if tc.invalidMember == "empty" {
+											members = []map[string]any{}
+										} else if tc.invalidMember != "" {
+											// A valid leaf must not hide an invalid sibling.
+											members = append(members, map[string]any{"mid": "valid-track", "name": "Valid song", "type": "track", "container": "no", "playable": "yes"})
+										}
+										if tc.multi {
+											members = append(members, map[string]any{"mid": "track-next", "name": "Next song", "type": "song", "container": "no", "playable": "yes"})
+										}
+										payload = members
+										params.Set("count", strconv.Itoa(len(members)))
+										params.Set("returned", strconv.Itoa(len(members)))
 									}
 								}
 							case "player/set_volume":
@@ -518,7 +547,42 @@ func TestPlaybackWireOrderReadbackAndReplay(t *testing.T) {
 					cmd.Automation = &Automation{TargetLevel: 10, DurationSeconds: 15}
 				}
 			}
+			assertReadOnly := func() {
+				t.Helper()
+				mu.Lock()
+				deviceWrites := append([]string(nil), writes...)
+				mu.Unlock()
+				db.mu.Lock()
+				operations, keys := len(db.ops), len(db.keys)
+				db.mu.Unlock()
+				if len(deviceWrites) != 0 || operations != 0 || keys != 0 {
+					t.Fatalf("read-only validation mutated device or journal: writes=%v operations=%d keys=%d", deviceWrites, operations, keys)
+				}
+			}
+			if tc.nonPlayableContainer {
+				if !page.Items[0].Container || page.Items[0].Playable {
+					t.Fatal("fixture must retain container=yes, playable=no", page.Items[0])
+				}
+				var wantErr error
+				if tc.invalidMember != "" {
+					wantErr = heos.ErrBounds
+				}
+				preflight, err := reads.Preflight(ctx, "room", cmd)
+				if !errors.Is(err, wantErr) || err == nil && !preflight.Ready {
+					t.Fatalf("preflight=%+v error=%v want %v", preflight, err, wantErr)
+				}
+				assertReadOnly()
+				p, _ = reads.Player("room")
+				request.IfMatch = fmt.Sprintf("%q", p.Revision)
+			}
 			a, e := c.Submit(ctx, request, cmd)
+			if tc.invalidMember != "" {
+				if !errors.Is(e, heos.ErrBounds) {
+					t.Fatalf("submission error=%v want %v", e, heos.ErrBounds)
+				}
+				assertReadOnly()
+				return
+			}
 			if e != nil {
 				t.Fatal(e)
 			}
