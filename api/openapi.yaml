@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: HEOS control service
-  version: 0.13.0
+  version: 0.13.1
   license:
     name: MIT
     identifier: MIT
