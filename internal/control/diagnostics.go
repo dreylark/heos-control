@@ -79,12 +79,12 @@ func snapshotLog(s heos.Snapshot) slog.Value {
 			slog.String("mid", fingerprint(string(s.Media.ID))), slog.String("qid", fingerprint(string(s.Media.QueueID))), slog.String("fingerprint", objectFingerprint(s.Media)))
 	}
 	state := "unknown"
-	if s.State == "play" || s.State == "pause" || s.State == "stop" {
-		state = s.State
+	if s.State.Writable() {
+		state = string(s.State)
 	}
 	repeat := "unknown"
-	if s.Repeat == "off" || s.Repeat == "on_all" || s.Repeat == "on_one" {
-		repeat = s.Repeat
+	if s.Repeat.Known() {
+		repeat = string(s.Repeat)
 	}
 	return slog.GroupValue(slog.String("state", state), slog.Any("volume", s.Volume), slog.Any("muted", s.Muted),
 		slog.String("repeat", repeat), slog.Bool("shuffle", s.Shuffle), slog.Bool("grouped", s.Grouped),

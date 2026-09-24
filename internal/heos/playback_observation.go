@@ -44,8 +44,8 @@ func (o *Observer) RefreshPlayback(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	state := r.Params.Get("state")
-	if len(r.Params["state"]) != 1 || (state != "play" && state != "pause" && state != "stop" && state != "unknown") {
+	state := PlayState(r.Params.Get("state"))
+	if len(r.Params["state"]) != 1 || !state.Known() {
 		return ErrProtocol
 	}
 	r, err = read("player/get_now_playing_media")
@@ -66,7 +66,7 @@ func (o *Observer) RefreshPlayback(ctx context.Context) error {
 		return ErrStale
 	}
 	s.State, s.Media, s.EventUpdated = state, &media, true
-	s.MediaStale = state != "play" && state != "pause"
+	s.MediaStale = !state.Active()
 	s.Playhead = o.playheadForMedia(s.Media, state)
 	o.last, o.mediaPending = s, false
 	o.signalChanged()

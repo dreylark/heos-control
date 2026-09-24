@@ -23,7 +23,7 @@ func skipAdmissible(ceiling *int, direction string, s heos.Snapshot) error {
 	if ceiling == nil || s.Volume == nil || *s.Volume > *ceiling {
 		return heos.ErrBounds
 	}
-	if (s.State != "play" && s.State != "pause") || !completeQueuePage(s.Queue) || !queuedMedia(s.Queue, s.Media) {
+	if !s.State.Active() || !completeQueuePage(s.Queue) || !queuedMedia(s.Queue, s.Media) {
 		return ErrNotSkippable
 	}
 	if atSkipBoundary(direction, s) {
@@ -36,7 +36,7 @@ func skipAdmissible(ceiling *int, direction string, s heos.Snapshot) error {
 // Shuffle can leave the current index, so a longer queue is not judged by index.
 // A single entry has nowhere to go even when shuffle is on.
 func atSkipBoundary(direction string, s heos.Snapshot) bool {
-	if s.Repeat != "off" || (direction != "next" && direction != "previous") {
+	if s.Repeat != heos.RepeatOff || (direction != "next" && direction != "previous") {
 		return false
 	}
 	if len(s.Queue.Items) == 1 {
@@ -83,7 +83,7 @@ func queueExtension(prefix, full heos.QueuePage) bool {
 // Settled state is play or pause. Direction is not re-derived from index order:
 // shuffle can select a non-adjacent member, and the native reply has no QID.
 func skipConfirmed(before, after heos.Snapshot) bool {
-	if (after.State != "play" && after.State != "pause") || before.Media == nil || after.Media == nil {
+	if !after.State.Active() || before.Media == nil || after.Media == nil {
 		return false
 	}
 	if after.Media.QueueID == "" || after.Media.QueueID == before.Media.QueueID || !queuedMedia(before.Queue, after.Media) {
@@ -104,7 +104,7 @@ func (r *execution) acceptSkipReadback(ctx context.Context, before, after heos.S
 	if err := context.Cause(ctx); err != nil {
 		return false, err
 	}
-	if changes := pendingChanges(before, after, heos.Mutation{Kind: "skip"}); len(changes) != 0 {
+	if changes := pendingChanges(before, after, heos.Mutation{Kind: heos.MutationKindSkip}); len(changes) != 0 {
 		return false, ownershipMismatch("pending_readback_changed", changes, before, after)
 	}
 	// A full read may already cover an event received during Refresh's retry.

@@ -96,7 +96,7 @@ func (s *Reads) Player(key string) (Player, error) {
 		return Player{}, e
 	}
 	v := d.Observer.Snapshot()
-	p := Player{Key: key, Availability: "offline", Stale: v.Stale, PlaybackState: "unknown", Volume: Volume{Unit: "heos", Level: v.Volume}, VolumeCeiling: cloneInt(d.Config.VolumeCeiling), Muted: v.Muted, Capabilities: Capabilities{"unverified", "unverified", "unverified"}}
+	p := Player{Key: key, Availability: "offline", Stale: v.Stale, PlaybackState: string(heos.PlayStateUnknown), Volume: Volume{Unit: "heos", Level: v.Volume}, VolumeCeiling: cloneInt(d.Config.VolumeCeiling), Muted: v.Muted, Capabilities: Capabilities{"unverified", "unverified", "unverified"}}
 	if v.Connected {
 		p.Availability = "unknown"
 	}
@@ -111,7 +111,7 @@ func (s *Reads) Player(key string) (Player, error) {
 	if !v.ObservedAt.IsZero() {
 		at := v.ObservedAt.UTC()
 		p.ObservedAt = &at
-		p.PlaybackState = v.State
+		p.PlaybackState = string(v.State)
 		g := v.Grouped
 		p.Grouped = &g
 	}

@@ -19,13 +19,13 @@ func TestSkipUnknownStateIsNotSkippable(t *testing.T) {
 			c, j, d, req := skipFixture(t, "", 0, 1)
 			if takeover {
 				c.lanes["room"].device.Observer = changingObservation{d.fakeDevice, func() error {
-					d.s.State = "unknown"
+					d.s.State = heos.PlayStateUnknown
 					return nil
 				}}
 			} else {
-				d.s.State = "unknown"
+				d.s.State = heos.PlayStateUnknown
 			}
-			_, err := c.Submit(context.Background(), skipRequest(c, req), Command{Kind: "skip", Direction: "next", Takeover: takeover})
+			_, err := c.Submit(context.Background(), skipRequest(c, req), Command{Kind: CommandKindSkip, Direction: "next", Takeover: takeover})
 			if !errors.Is(err, ErrNotSkippable) {
 				t.Fatalf("unknown playback state: got %v, want %v", err, ErrNotSkippable)
 			}
@@ -55,9 +55,9 @@ func TestSkipUnknownStatePreservesDeviceSafety(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c, j, d, req := skipFixture(t, "", 0, 1)
-			d.s.State = "unknown"
+			d.s.State = heos.PlayStateUnknown
 			tc.edit(c.lanes["room"], &d.s)
-			_, err := c.Submit(context.Background(), skipRequest(c, req), Command{Kind: "skip", Direction: "next"})
+			_, err := c.Submit(context.Background(), skipRequest(c, req), Command{Kind: CommandKindSkip, Direction: "next"})
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("unsafe observation: got %v, want %v", err, tc.want)
 			}
@@ -73,10 +73,10 @@ func TestSkipUnknownStateBeforeSendingIsNotSkippable(t *testing.T) {
 	c.lanes["room"].device.Observer = changingObservation{d.fakeDevice, func() error {
 		d.mu.Lock()
 		defer d.mu.Unlock()
-		d.s.State = "unknown"
+		d.s.State = heos.PlayStateUnknown
 		return nil
 	}}
-	a, err := c.Submit(context.Background(), skipRequest(c, req), Command{Kind: "skip", Direction: "next"})
+	a, err := c.Submit(context.Background(), skipRequest(c, req), Command{Kind: CommandKindSkip, Direction: "next"})
 	if err != nil {
 		t.Fatal(err)
 	}

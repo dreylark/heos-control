@@ -83,9 +83,7 @@ func probeClient(ctx context.Context, client *Client, identity Identity) ProbeRe
 	if len(state.Params["pid"]) != 1 || state.Params.Get("pid") != string(player.ID) || len(state.Params["state"]) != 1 {
 		return probeResult("protocol")
 	}
-	switch state.Params.Get("state") {
-	case "play", "pause", "stop", "unknown": // Firmware unknown remains a valid observation.
-	default:
+	if !PlayState(state.Params.Get("state")).Known() { // Firmware unknown remains a valid observation.
 		return probeResult("protocol")
 	}
 	if err := context.Cause(ctx); err != nil {

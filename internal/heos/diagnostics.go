@@ -25,9 +25,9 @@ func diagnosticParams(params url.Values) slog.Value {
 		key    string
 		values []string
 	}{
-		{"state", []string{"play", "pause", "stop", "unknown"}},
+		{"state", []string{string(PlayStatePlay), string(PlayStatePause), string(PlayStateStop), string(PlayStateUnknown)}},
 		{"mute", []string{"on", "off"}}, {"shuffle", []string{"on", "off"}},
-		{"repeat", []string{"off", "on_all", "on_one"}}, {"enable", []string{"on", "off"}},
+		{"repeat", []string{string(RepeatOff), string(RepeatOnAll), string(RepeatOnOne)}}, {"enable", []string{"on", "off"}},
 	} {
 		if len(params[field.key]) != 1 {
 			continue

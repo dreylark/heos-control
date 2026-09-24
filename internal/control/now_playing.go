@@ -33,7 +33,7 @@ type NowPlayingProgress struct {
 
 func (s *Reads) nowPlaying(player config.Player, v heos.Snapshot) *NowPlaying {
 	if !v.Connected || v.MediaUnavailable || v.ObservedAt.IsZero() || v.Media == nil ||
-		(v.State != "play" && v.State != "pause") || v.Player.ID == "" || player.Serial == "" ||
+		!v.State.Active() || v.Player.ID == "" || player.Serial == "" ||
 		string(v.Player.Serial) != player.Serial || (player.Model != "" && string(v.Player.Model) != player.Model) {
 		return nil
 	}

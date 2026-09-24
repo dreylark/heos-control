@@ -82,7 +82,7 @@ func TestConfirmationMetricsMeasureApplicationAndExcludeNotSent(t *testing.T) {
 			case "uncertain":
 				expectedResult, expectedDuration = "uncertain", 0
 			}
-			err := c.write(c.lanes["room"], r, heos.Mutation{Kind: "volume", Level: 21})
+			err := c.write(c.lanes["room"], r, heos.Mutation{Kind: heos.MutationKindVolume, Level: 21})
 			if (err == nil) != (outcome == "event" || outcome == "event_before_reply" || outcome == "fallback") {
 				t.Fatal("unexpected command result", err)
 			}
@@ -112,12 +112,12 @@ func TestOperationMetricsDoNotCountIdempotentReplay(t *testing.T) {
 	c, journalStore, _, request := fixtureCoordinator(t)
 	metrics := telemetry.NewPlayer("room")
 	c.lanes["room"].device.Metrics = metrics
-	first, err := c.Submit(context.Background(), request, Command{Kind: "volume", Level: 10})
+	first, err := c.Submit(context.Background(), request, Command{Kind: CommandKindVolume, Level: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
 	awaitOperation(t, journalStore, first.ID)
-	second, err := c.Submit(context.Background(), request, Command{Kind: "volume", Level: 10})
+	second, err := c.Submit(context.Background(), request, Command{Kind: CommandKindVolume, Level: 10})
 	if err != nil || second.ID != first.ID {
 		t.Fatal(second, err)
 	}
@@ -218,7 +218,7 @@ func TestOperationMetricsCancellationAndSupersession(t *testing.T) {
 				persisting <- active
 			}}
 			request.Method, request.IfMatch = "POST", ""
-			original, err := c.Submit(context.Background(), request, Command{Kind: "stop", FadeSeconds: 30})
+			original, err := c.Submit(context.Background(), request, Command{Kind: CommandKindStop, FadeSeconds: 30})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -235,9 +235,9 @@ func TestOperationMetricsCancellationAndSupersession(t *testing.T) {
 				t.Fatal("active work was not reported as unfinished")
 			}
 			request.Key = "replacement"
-			command := Command{Kind: "cancel", Mode: mode, Target: original.ID}
+			command := Command{Kind: CommandKindCancel, Mode: mode, Target: original.ID}
 			if mode == "operator_stop" {
-				command = Command{Kind: "stop"}
+				command = Command{Kind: CommandKindStop}
 			}
 			replacement, err := c.Submit(context.Background(), request, command)
 			if err != nil {

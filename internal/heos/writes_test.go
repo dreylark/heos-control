@@ -32,13 +32,13 @@ func TestGuardedWritesFollowDenonAndInvalidateSnapshots(t *testing.T) {
 		t.Fatal(e)
 	}
 	guard := Guard{Token: client.observePlayer("-42").Token, ExpiresAt: time.Now().Add(time.Second)}
-	if _, e = client.Write(ctx, Mutation{Kind: "volume", Player: "-42", Level: 10}, guard); e != nil {
+	if _, e = client.Write(ctx, Mutation{Kind: MutationKindVolume, Player: "-42", Level: 10}, guard); e != nil {
 		t.Fatal(e)
 	}
 	if client.PlayerView("-42").Token == guard.Token {
 		t.Fatal("write did not invalidate cached observation")
 	}
-	if _, e = client.Write(ctx, Mutation{Kind: "volume", Player: "-42", Level: 11}, guard); !errors.Is(e, ErrStale) {
+	if _, e = client.Write(ctx, Mutation{Kind: MutationKindVolume, Player: "-42", Level: 11}, guard); !errors.Is(e, ErrStale) {
 		t.Fatal("stale write accepted", e)
 	}
 	if writes.Load() != 1 {
@@ -63,7 +63,7 @@ func TestExpiredObservationNeverAuthorizesWrite(t *testing.T) {
 		t.Fatal(e)
 	}
 	guard := Guard{Token: c.observePlayer("1").Token, ExpiresAt: time.Now().Add(-time.Second)}
-	if _, e = c.Write(context.Background(), Mutation{Kind: "volume", Player: "1", Level: 10}, guard); !errors.Is(e, ErrStale) {
+	if _, e = c.Write(context.Background(), Mutation{Kind: MutationKindVolume, Player: "1", Level: 10}, guard); !errors.Is(e, ErrStale) {
 		t.Fatal(e)
 	}
 	if writes.Load() != 0 {
@@ -88,7 +88,7 @@ func TestWriteRevisionStorageRequiresObservedPlayer(t *testing.T) {
 		t.Fatal(err)
 	}
 	guard := Guard{Token: c.PlayerView("unobserved").Token, ExpiresAt: time.Now().Add(time.Second)}
-	if _, err := c.Write(context.Background(), Mutation{Kind: "volume", Player: "unobserved", Level: 10}, guard); !errors.Is(err, ErrStale) || writes.Load() != 0 {
+	if _, err := c.Write(context.Background(), Mutation{Kind: MutationKindVolume, Player: "unobserved", Level: 10}, guard); !errors.Is(err, ErrStale) || writes.Load() != 0 {
 		t.Fatal("unobserved player created unbounded write bookkeeping", err, writes.Load())
 	}
 	if len(c.writes) != 0 {
@@ -105,12 +105,12 @@ func TestMutationWireAllowlistAndDisabledGate(t *testing.T) {
 		}
 	}
 	for _, tc := range []struct{ direction, command string }{{"next", "player/play_next"}, {"previous", "player/play_previous"}} {
-		name, args, err := (Mutation{Kind: "skip", Player: "1", Direction: tc.direction}).command()
+		name, args, err := (Mutation{Kind: MutationKindSkip, Player: "1", Direction: tc.direction}).command()
 		if err != nil || name != tc.command || len(args) != 1 || args.Get("pid") != "1" {
 			t.Fatal(name, args, err)
 		}
 	}
-	m := Mutation{Kind: "queue", Player: "1", Item: Item{Source: "900", ContainerID: "Album/+%&", Container: "yes", Playable: "yes"}}
+	m := Mutation{Kind: MutationKindQueue, Player: "1", Item: Item{Source: "900", ContainerID: "Album/+%&", Container: "yes", Playable: "yes"}}
 	name, args, e := m.command()
 	if e != nil || name != "browse/add_to_queue" || args.Get("aid") != "4" || args.Get("cid") != "Album/+%&" {
 		t.Fatal(name, args, e)
@@ -162,7 +162,7 @@ func TestPriorityStopInterruptsBrowseOnTheWire(t *testing.T) {
 	priority := Priority(ctx)
 	eventually(t, func() bool { _, e := c.Read(priority, "player/get_players", nil); return e == nil })
 	guard := Guard{Token: c.observePlayer("1").Token, ExpiresAt: time.Now().Add(time.Second)}
-	if _, e := c.Write(priority, Mutation{Kind: "transport", Player: "1", State: "stop"}, guard); e != nil {
+	if _, e := c.Write(priority, Mutation{Kind: MutationKindTransport, Player: "1", State: PlayStateStop}, guard); e != nil {
 		t.Fatal(e)
 	}
 	if stopped.Load() != 1 {
@@ -191,12 +191,12 @@ func TestLostWriteReplyRemainsUncertainAndIsNeverReplayed(t *testing.T) {
 		t.Fatal(e)
 	}
 	guard := Guard{Token: c.observePlayer("1").Token, ExpiresAt: time.Now().Add(time.Second)}
-	_, e = c.Write(ctx, Mutation{Kind: "volume", Player: "1", Level: 10}, guard)
+	_, e = c.Write(ctx, Mutation{Kind: MutationKindVolume, Player: "1", Level: 10}, guard)
 	var ce *CommandError
 	if !errors.As(e, &ce) || ce.Delivery != Uncertain {
 		t.Fatal(e)
 	}
-	if _, e = c.Write(ctx, Mutation{Kind: "volume", Player: "1", Level: 10}, guard); !errors.Is(e, ErrStale) {
+	if _, e = c.Write(ctx, Mutation{Kind: MutationKindVolume, Player: "1", Level: 10}, guard); !errors.Is(e, ErrStale) {
 		t.Fatal(e)
 	}
 	if writes.Load() != 1 {

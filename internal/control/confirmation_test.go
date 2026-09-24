@@ -16,14 +16,14 @@ type pendingDevice struct {
 	kind, change string
 	pending      bool
 	reads        int
-	states       []string
+	states       []heos.PlayState
 	noMedia      bool
 }
 
 func (d *pendingDevice) Write(ctx context.Context, m heos.Mutation, g heos.Guard) (heos.Response, error) {
 	before := d.Snapshot().State
 	r, err := d.albumDevice.Write(ctx, m, g)
-	if err == nil && m.Kind == d.kind {
+	if err == nil && m.Kind == heos.MutationKind(d.kind) {
 		d.mu.Lock()
 		d.s.State = before // Successful reply, but the device has not changed state.
 		d.pending = true
@@ -68,7 +68,7 @@ func (d *pendingDevice) Refresh(ctx context.Context) error {
 			case "generation":
 				d.s.Token.Generation++
 			case "pause":
-				d.s.State = "pause"
+				d.s.State = heos.PlayStatePause
 			}
 		}
 		if d.reads == 3 && d.change == "hybrid-queued-media" {
@@ -86,12 +86,12 @@ func TestPlayRetainedShuffledQueueWaitsForFinalMIDQID(t *testing.T) {
 	base.s.Queue = heos.QueuePage{Items: append([]heos.Media(nil), base.tracks...), Total: &total}
 	first := base.tracks[0]
 	base.s.Media = &first
-	d := &pendingDevice{albumDevice: base, kind: "transport", change: "hybrid-queued-media", states: []string{"stop", "unknown", "play"}}
+	d := &pendingDevice{albumDevice: base, kind: "transport", change: "hybrid-queued-media", states: []heos.PlayState{"stop", "unknown", "play"}}
 	c.lanes["room"].writer, c.lanes["room"].device.Observer = d, d
 	c.clock = &advancingClock{now: time.Now()}
 	p, _ := c.reads.Player("room")
 	req.IfMatch = fmt.Sprintf("%q", p.Revision)
-	a, err := c.Submit(context.Background(), req, Command{Kind: "transport", State: "play"})
+	a, err := c.Submit(context.Background(), req, Command{Kind: CommandKindTransport, State: heos.PlayStatePlay})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,33 +102,33 @@ func TestPlayRetainedShuffledQueueWaitsForFinalMIDQID(t *testing.T) {
 }
 
 func TestQueueLoadingStopBeforePlaybackConfirmation(t *testing.T) {
-	for _, initial := range []string{"pause", "stop"} {
+	for _, initial := range []heos.PlayState{heos.PlayStatePause, heos.PlayStateStop} {
 		for _, tc := range []struct {
 			name    string
-			states  []string
+			states  []heos.PlayState
 			noMedia bool
 			event   string
 			change  string
 			code    string
 		}{
-			{name: "loading", states: []string{initial, "stop", "play"}},
-			{name: "unknown-loading", states: []string{initial, "stop", "unknown", "unknown", "play"}},
-			{name: "unknown-timeout", states: []string{"unknown"}, code: "device_unavailable"},
-			{name: "unknown-after-play-event", states: []string{"unknown", "unknown", "play"}, event: "play"},
-			{name: "unknown-after-play-readback", states: []string{"play", "unknown"}, noMedia: true, code: "device_unavailable"},
-			{name: "unknown-manual-pause", states: []string{"unknown"}, event: "pause", code: "ownership_lost"},
-			{name: "unknown-volume-change", states: []string{"unknown"}, change: "volume", code: "ownership_lost"},
-			{name: "unknown-source-change", states: []string{"unknown"}, change: "source", code: "ownership_lost"},
-			{name: "unknown-queue-change", states: []string{"unknown"}, change: "queue", code: "ownership_lost"},
-			{name: "unknown-generation-change", states: []string{"unknown"}, change: "generation", code: "ownership_lost"},
-			{name: "stays-stopped", states: []string{"stop"}, code: "device_unavailable"},
-			{name: "repeated-stop-deadline", states: []string{"stop"}, event: "stop", code: "device_unavailable"},
-			{name: "stop-after-play-readback", states: []string{"play", "stop"}, noMedia: true, code: "ownership_lost"},
-			{name: "pause-after-play-readback", states: []string{"play", "pause"}, noMedia: true, code: "ownership_lost"},
-			{name: "stop-event-after-play-readback", states: []string{"play"}, noMedia: true, event: "stop", code: "ownership_lost"},
-			{name: "late-play-event", states: []string{"play"}, noMedia: true, event: "play", code: "device_unavailable"},
+			{name: "loading", states: []heos.PlayState{initial, "stop", "play"}},
+			{name: "unknown-loading", states: []heos.PlayState{initial, "stop", "unknown", "unknown", "play"}},
+			{name: "unknown-timeout", states: []heos.PlayState{"unknown"}, code: "device_unavailable"},
+			{name: "unknown-after-play-event", states: []heos.PlayState{"unknown", "unknown", "play"}, event: "play"},
+			{name: "unknown-after-play-readback", states: []heos.PlayState{"play", "unknown"}, noMedia: true, code: "device_unavailable"},
+			{name: "unknown-manual-pause", states: []heos.PlayState{"unknown"}, event: "pause", code: "ownership_lost"},
+			{name: "unknown-volume-change", states: []heos.PlayState{"unknown"}, change: "volume", code: "ownership_lost"},
+			{name: "unknown-source-change", states: []heos.PlayState{"unknown"}, change: "source", code: "ownership_lost"},
+			{name: "unknown-queue-change", states: []heos.PlayState{"unknown"}, change: "queue", code: "ownership_lost"},
+			{name: "unknown-generation-change", states: []heos.PlayState{"unknown"}, change: "generation", code: "ownership_lost"},
+			{name: "stays-stopped", states: []heos.PlayState{"stop"}, code: "device_unavailable"},
+			{name: "repeated-stop-deadline", states: []heos.PlayState{"stop"}, event: "stop", code: "device_unavailable"},
+			{name: "stop-after-play-readback", states: []heos.PlayState{"play", "stop"}, noMedia: true, code: "ownership_lost"},
+			{name: "pause-after-play-readback", states: []heos.PlayState{"play", "pause"}, noMedia: true, code: "ownership_lost"},
+			{name: "stop-event-after-play-readback", states: []heos.PlayState{"play"}, noMedia: true, event: "stop", code: "ownership_lost"},
+			{name: "late-play-event", states: []heos.PlayState{"play"}, noMedia: true, event: "play", code: "device_unavailable"},
 		} {
-			t.Run(initial+"/"+tc.name, func(t *testing.T) {
+			t.Run(string(initial)+"/"+tc.name, func(t *testing.T) {
 				c, j, base, req, cmd := albumFixture(t)
 				base.s.State = initial
 				p, _ := c.reads.Player("room")
@@ -168,7 +168,7 @@ func TestQueueLoadingStopBeforePlaybackConfirmation(t *testing.T) {
 				}
 				d.mu.Lock()
 				defer d.mu.Unlock()
-				if len(d.writes) != 4 || d.writes[3].Kind != "queue" {
+				if len(d.writes) != 4 || d.writes[3].Kind != heos.MutationKindQueue {
 					t.Fatal("queue setter replayed or extra cleanup sent", d.writes)
 				}
 			})
@@ -183,8 +183,8 @@ func TestPendingReadbackHasDeadlineAndNeverRepeatsWrites(t *testing.T) {
 			d := &pendingDevice{albumDevice: base, kind: "queue", change: scenario}
 			if scenario == "stop-timeout" {
 				d.kind = "transport"
-				d.s.State = "play"
-				cmd = Command{Kind: "stop"}
+				d.s.State = heos.PlayStatePlay
+				cmd = Command{Kind: CommandKindStop}
 				req.Endpoint = "/v1/players/room/stop"
 			}
 			c.lanes["room"].writer = d
@@ -212,7 +212,7 @@ func TestPendingReadbackHasDeadlineAndNeverRepeatsWrites(t *testing.T) {
 			defer d.mu.Unlock()
 			count := 0
 			for _, m := range d.writes {
-				if m.Kind == d.kind {
+				if m.Kind == heos.MutationKind(d.kind) {
 					count++
 				}
 			}
@@ -229,7 +229,7 @@ func TestStopConfirmationChecksQueueWhenPositionResets(t *testing.T) {
 	for _, scenario := range []string{"reset-media", "empty-media", "foreign-media", "queue", "volume", "unknown"} {
 		t.Run(scenario, func(t *testing.T) {
 			c, j, base, req, _ := albumFixture(t)
-			base.s.State = "play"
+			base.s.State = heos.PlayStatePlay
 			total := len(base.tracks)
 			base.s.Queue = heos.QueuePage{Items: append([]heos.Media(nil), base.tracks...), Total: &total}
 			current := base.tracks[2]
@@ -239,9 +239,9 @@ func TestStopConfirmationChecksQueueWhenPositionResets(t *testing.T) {
 				change = "reset-media"
 				base.tracks[0].ID = "foreign"
 			}
-			states := []string{"play", "stop"}
+			states := []heos.PlayState{"play", "stop"}
 			if scenario == "unknown" {
-				states = []string{"unknown", "stop"}
+				states = []heos.PlayState{"unknown", "stop"}
 				change = "reset-media"
 			}
 			d := &pendingDevice{albumDevice: base, kind: "transport", states: states, change: change}
@@ -250,7 +250,7 @@ func TestStopConfirmationChecksQueueWhenPositionResets(t *testing.T) {
 			req.Endpoint = "/v1/players/room/stop"
 			p, _ := c.reads.Player("room")
 			req.IfMatch = fmt.Sprintf("%q", p.Revision)
-			a, err := c.Submit(context.Background(), req, Command{Kind: "stop"})
+			a, err := c.Submit(context.Background(), req, Command{Kind: CommandKindStop})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -264,7 +264,7 @@ func TestStopConfirmationChecksQueueWhenPositionResets(t *testing.T) {
 			}
 			d.mu.Lock()
 			defer d.mu.Unlock()
-			if len(d.writes) != 1 || d.writes[0].Kind != "transport" {
+			if len(d.writes) != 1 || d.writes[0].Kind != heos.MutationKindTransport {
 				t.Fatal("stop replayed", d.writes)
 			}
 		})
@@ -272,19 +272,19 @@ func TestStopConfirmationChecksQueueWhenPositionResets(t *testing.T) {
 }
 
 func TestTransportConfirmationWaitsForRequestedState(t *testing.T) {
-	for _, target := range []string{"play", "pause", "stop"} {
+	for _, target := range []heos.PlayState{"play", "pause", "stop"} {
 		for _, scenario := range []string{"delayed", "timeout", "changed-volume"} {
-			t.Run(target+"/"+scenario, func(t *testing.T) {
+			t.Run(string(target)+"/"+scenario, func(t *testing.T) {
 				c, j, base, req, _ := albumFixture(t)
-				initial := "play"
-				if target == "play" {
-					initial = "stop"
+				initial := heos.PlayStatePlay
+				if target == heos.PlayStatePlay {
+					initial = heos.PlayStateStop
 				}
 				base.s.State = initial
-				states := []string{initial, "unknown", target}
+				states := []heos.PlayState{initial, "unknown", target}
 				change := ""
 				if scenario == "timeout" {
-					states = []string{"unknown"}
+					states = []heos.PlayState{"unknown"}
 				}
 				if scenario == "changed-volume" {
 					change = "volume"
@@ -297,7 +297,7 @@ func TestTransportConfirmationWaitsForRequestedState(t *testing.T) {
 				req.Endpoint = "/v1/players/room/transport"
 				p, _ := c.reads.Player("room")
 				req.IfMatch = fmt.Sprintf("%q", p.Revision)
-				a, err := c.Submit(context.Background(), req, Command{Kind: "transport", State: target})
+				a, err := c.Submit(context.Background(), req, Command{Kind: CommandKindTransport, State: target})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -327,14 +327,14 @@ func TestTransportConfirmationWaitsForRequestedState(t *testing.T) {
 }
 
 func TestTransportMediaEventsRequireFreshMatchingReadback(t *testing.T) {
-	for _, target := range []string{"play", "pause", "stop"} {
+	for _, target := range []heos.PlayState{"play", "pause", "stop"} {
 		for _, foreign := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/foreign=%t", target, foreign), func(t *testing.T) {
 				c, j, d, req := fixtureCoordinator(t)
 				d.s.Media = &heos.Media{Source: "1024", ID: "track", QueueID: "1"}
-				d.s.State = "play"
-				if target == "play" {
-					d.s.State = "stop"
+				d.s.State = heos.PlayStatePlay
+				if target == heos.PlayStatePlay {
+					d.s.State = heos.PlayStateStop
 				}
 				p, _ := c.reads.Player("room")
 				req.IfMatch = fmt.Sprintf("%q", p.Revision)
@@ -350,7 +350,7 @@ func TestTransportMediaEventsRequireFreshMatchingReadback(t *testing.T) {
 						d.mu.Unlock()
 					}
 				}
-				a, err := c.Submit(context.Background(), req, Command{Kind: "transport", State: target})
+				a, err := c.Submit(context.Background(), req, Command{Kind: CommandKindTransport, State: target})
 				if err != nil {
 					t.Fatal(err)
 				}

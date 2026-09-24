@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/dreylark/heos-control/internal/control"
+	"github.com/dreylark/heos-control/internal/heos"
 	"github.com/dreylark/heos-control/internal/journal"
 )
 
@@ -48,7 +49,7 @@ func TestTransportAuthorizationAndCommandMapping(t *testing.T) {
 				t.Fatal(w.Code, w.Body)
 			}
 			if tc.status == 202 {
-				if submit.calls != 1 || submit.cmd.Kind != "transport" || submit.cmd.State != tc.state || submit.cmd.Takeover || submit.request.IfMatch != `"revision"` {
+				if submit.calls != 1 || submit.cmd.Kind != control.CommandKindTransport || submit.cmd.State != heos.PlayState(tc.state) || submit.cmd.Takeover || submit.request.IfMatch != `"revision"` {
 					t.Fatal(submit)
 				}
 			} else if submit.calls != 0 {
@@ -102,7 +103,7 @@ func (c *captureSubmitter) Submit(_ context.Context, r journal.Request, cmd cont
 	c.calls++
 	c.request = r
 	c.cmd = cmd
-	return journal.Operation{ID: "op_actual_ID", Player: r.Player, Principal: r.Principal, Kind: cmd.Kind, State: journal.Accepted, Revision: 1, CreatedAt: time.Now(), UpdatedAt: time.Now()}, c.err
+	return journal.Operation{ID: "op_actual_ID", Player: r.Player, Principal: r.Principal, Kind: string(cmd.Kind), State: journal.Accepted, Revision: 1, CreatedAt: time.Now(), UpdatedAt: time.Now()}, c.err
 }
 func TestMutationScopesValidationAndResponseContract(t *testing.T) {
 	for _, tc := range []struct {
@@ -158,7 +159,7 @@ func TestMutationScopesValidationAndResponseContract(t *testing.T) {
 			if tc.name == "bounded playback" && (submit.cmd.Automation == nil || submit.cmd.Automation.TargetLevel != 40 || submit.cmd.Automation.DurationSeconds != 1200 || submit.cmd.Automation.RampSeconds != 300 || submit.cmd.Automation.FadeSeconds != 30) {
 				t.Fatal("lost automation settings", submit.cmd)
 			}
-			if tc.name == "skip" && (submit.cmd.Kind != "skip" || submit.cmd.Direction != "next" || submit.cmd.Takeover) {
+			if tc.name == "skip" && (submit.cmd.Kind != control.CommandKindSkip || submit.cmd.Direction != "next" || submit.cmd.Takeover) {
 				t.Fatal(submit.cmd)
 			}
 		})

@@ -21,7 +21,7 @@ func TestModeEventsRetainEvidenceUntilSuccessfulReply(t *testing.T) {
 			}
 			before := r.expected
 			r.inflight = true
-			r.expect(heos.Mutation{Kind: "mode", Repeat: "off", Shuffle: true})
+			r.expect(heos.Mutation{Kind: heos.MutationKindMode, Repeat: heos.RepeatOff, Shuffle: true})
 			value := "off"
 			if field == "shuffle" {
 				value = "on"
@@ -47,7 +47,7 @@ func TestModeIndependentFieldProgressAndReversal(t *testing.T) {
 		for _, reversal := range []bool{false, true} {
 			t.Run(first+map[bool]string{false: "/progress", true: "/reversal"}[reversal], func(t *testing.T) {
 				c, r, d, clock := modeEventFixture(t)
-				d.s.Repeat, r.expected.Repeat = "on_all", "on_all"
+				d.s.Repeat, r.expected.Repeat = heos.RepeatOnAll, "on_all"
 				began := clock.Now()
 				other := "shuffle"
 				if first == "shuffle" {
@@ -69,7 +69,7 @@ func TestModeIndependentFieldProgressAndReversal(t *testing.T) {
 					}},
 					{began.Add(400 * time.Millisecond), func() { r.event(modeEvent(other, target[other])) }},
 				}
-				err := c.write(c.lanes["room"], r, heos.Mutation{Kind: "mode", Repeat: "off", Shuffle: true})
+				err := c.write(c.lanes["room"], r, heos.Mutation{Kind: heos.MutationKindMode, Repeat: heos.RepeatOff, Shuffle: true})
 				wantElapsed := 400 * time.Millisecond
 				if reversal {
 					wantElapsed = 300 * time.Millisecond
@@ -100,14 +100,14 @@ func TestModeConfirmationFallbackRespectsOriginalAndPlaybackDeadline(t *testing.
 			if scenario == "event-after-playback" {
 				clock.events = []modeClockEvent{{began.Add(budget + time.Millisecond), func() { r.event(modeEvent("shuffle", "on")) }}}
 			}
-			d.onScalarRead = func(string) error {
+			d.onScalarRead = func(heos.MutationKind) error {
 				if scenario == "fallback-crosses-original" {
 					clock.now = began.Add(budget + time.Millisecond)
 					d.s.Shuffle = true
 				}
 				return nil
 			}
-			err := c.write(c.lanes["room"], r, heos.Mutation{Kind: "mode", Repeat: "off", Shuffle: true})
+			err := c.write(c.lanes["room"], r, heos.Mutation{Kind: heos.MutationKindMode, Repeat: heos.RepeatOff, Shuffle: true})
 			if !errors.Is(err, context.DeadlineExceeded) || r.confirmed != 0 || len(d.writes) != 1 || len(d.reads) != 1 || len(d.scalarReads) != wantFallback {
 				t.Fatalf("confirmation escaped deadline: %v confirmed=%d full=%d fallback=%d writes=%d", err, r.confirmed, len(d.reads), len(d.scalarReads), len(d.writes))
 			}

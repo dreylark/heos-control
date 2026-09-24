@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/dreylark/heos-control/internal/control"
+	"github.com/dreylark/heos-control/internal/heos"
 	"github.com/dreylark/heos-control/internal/journal"
 )
 
@@ -34,7 +35,7 @@ func (s *Server) submit(ctx context.Context, player, key, match string, body any
 	return control.ProjectOperation(op), e
 }
 func playbackCommand(body PlaybackInput) control.Command {
-	cmd := control.Command{Kind: "playback", ItemRef: body.ItemRef, Level: body.InitialVolume.Level, Shuffle: body.Shuffle, Repeat: string(body.Repeat), Takeover: body.Takeover}
+	cmd := control.Command{Kind: control.CommandKindPlayback, ItemRef: body.ItemRef, Level: body.InitialVolume.Level, Shuffle: body.Shuffle, Repeat: heos.Repeat(body.Repeat), Takeover: body.Takeover}
 	if a := body.Automation; a != nil {
 		cmd.Automation = &control.Automation{TargetLevel: a.TargetVolume.Level, RampSeconds: a.RampSeconds, DurationSeconds: a.DurationSeconds, FadeSeconds: a.FadeSeconds}
 	}
@@ -50,35 +51,35 @@ func (s *Server) Playback(ctx context.Context, r PlaybackRequestObject) (Playbac
 	return Playback202JSONResponse{Body: op, Headers: Playback202ResponseHeaders{Location: "/v1/operations/" + op.ID}}, nil
 }
 func (s *Server) SetVolume(ctx context.Context, r SetVolumeRequestObject) (SetVolumeResponseObject, error) {
-	op, e := s.submit(ctx, r.Player, r.Params.IdempotencyKey, value(r.Params.IfMatch, ""), r.Body, control.Command{Kind: "volume", Level: r.Body.Level, Takeover: r.Body.Takeover})
+	op, e := s.submit(ctx, r.Player, r.Params.IdempotencyKey, value(r.Params.IfMatch, ""), r.Body, control.Command{Kind: control.CommandKindVolume, Level: r.Body.Level, Takeover: r.Body.Takeover})
 	if e != nil {
 		return nil, e
 	}
 	return SetVolume202JSONResponse{Body: op, Headers: SetVolume202ResponseHeaders{Location: "/v1/operations/" + op.ID}}, nil
 }
 func (s *Server) SetMute(ctx context.Context, r SetMuteRequestObject) (SetMuteResponseObject, error) {
-	op, e := s.submit(ctx, r.Player, r.Params.IdempotencyKey, value(r.Params.IfMatch, ""), r.Body, control.Command{Kind: "mute", Muted: r.Body.Muted, Takeover: r.Body.Takeover})
+	op, e := s.submit(ctx, r.Player, r.Params.IdempotencyKey, value(r.Params.IfMatch, ""), r.Body, control.Command{Kind: control.CommandKindMute, Muted: r.Body.Muted, Takeover: r.Body.Takeover})
 	if e != nil {
 		return nil, e
 	}
 	return SetMute202JSONResponse{Body: op, Headers: SetMute202ResponseHeaders{Location: "/v1/operations/" + op.ID}}, nil
 }
 func (s *Server) SetTransport(ctx context.Context, r SetTransportRequestObject) (SetTransportResponseObject, error) {
-	op, e := s.submit(ctx, r.Player, r.Params.IdempotencyKey, value(r.Params.IfMatch, ""), r.Body, control.Command{Kind: "transport", State: string(r.Body.State), Takeover: r.Body.Takeover})
+	op, e := s.submit(ctx, r.Player, r.Params.IdempotencyKey, value(r.Params.IfMatch, ""), r.Body, control.Command{Kind: control.CommandKindTransport, State: heos.PlayState(r.Body.State), Takeover: r.Body.Takeover})
 	if e != nil {
 		return nil, e
 	}
 	return SetTransport202JSONResponse{Body: op, Headers: SetTransport202ResponseHeaders{Location: "/v1/operations/" + op.ID}}, nil
 }
 func (s *Server) SkipPlayer(ctx context.Context, r SkipPlayerRequestObject) (SkipPlayerResponseObject, error) {
-	op, e := s.submit(ctx, r.Player, r.Params.IdempotencyKey, value(r.Params.IfMatch, ""), r.Body, control.Command{Kind: "skip", Direction: string(r.Body.Direction), Takeover: r.Body.Takeover})
+	op, e := s.submit(ctx, r.Player, r.Params.IdempotencyKey, value(r.Params.IfMatch, ""), r.Body, control.Command{Kind: control.CommandKindSkip, Direction: string(r.Body.Direction), Takeover: r.Body.Takeover})
 	if e != nil {
 		return nil, e
 	}
 	return SkipPlayer202JSONResponse{Body: op, Headers: SkipPlayer202ResponseHeaders{Location: "/v1/operations/" + op.ID}}, nil
 }
 func (s *Server) StopPlayer(ctx context.Context, r StopPlayerRequestObject) (StopPlayerResponseObject, error) {
-	op, e := s.submit(ctx, r.Player, r.Params.IdempotencyKey, "", r.Body, control.Command{Kind: "stop", FadeSeconds: r.Body.FadeSeconds})
+	op, e := s.submit(ctx, r.Player, r.Params.IdempotencyKey, "", r.Body, control.Command{Kind: control.CommandKindStop, FadeSeconds: r.Body.FadeSeconds})
 	if e != nil {
 		return nil, e
 	}
@@ -97,7 +98,7 @@ func (s *Server) CancelOperation(ctx context.Context, r CancelOperationRequestOb
 	if r.Body.Mode == Release && fade != 0 {
 		return nil, &apiFailure{422, "release_cannot_fade", false}
 	}
-	op, e := s.submit(ctx, target.Player, r.Params.IdempotencyKey, "", r.Body, control.Command{Kind: "cancel", Target: target.ID, Mode: string(r.Body.Mode), FadeSeconds: fade})
+	op, e := s.submit(ctx, target.Player, r.Params.IdempotencyKey, "", r.Body, control.Command{Kind: control.CommandKindCancel, Target: target.ID, Mode: string(r.Body.Mode), FadeSeconds: fade})
 	if e != nil {
 		return nil, e
 	}

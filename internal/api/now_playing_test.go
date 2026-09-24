@@ -29,7 +29,7 @@ func nowPlayingAPI(t *testing.T) (*Server, *nowPlayingDevice, *nowPlayingDevice)
 	s := testAPI(t)
 	v, muted, ceiling := 10, false, 40
 	d := &nowPlayingDevice{snapshot: heos.Snapshot{
-		Player: heos.Player{ID: "1", Serial: "serial"}, State: "play", Volume: &v, Muted: &muted,
+		Player: heos.Player{ID: "1", Serial: "serial"}, State: heos.PlayStatePlay, Volume: &v, Muted: &muted,
 		Connected: true, Verified: true, ObservedAt: time.Unix(100, 0),
 		Media: &heos.Media{Source: "private-source", ID: "https://private.invalid/song.mp3?secret=token", QueueID: "7", Song: "Song", Album: "Album", Artist: "Artist"},
 	}}
@@ -98,7 +98,7 @@ func TestNowPlayingResponseContractForListDetailAndPreflight(t *testing.T) {
 			wantNull := false
 			switch name {
 			case "pause", "stop", "unknown":
-				d.snapshot.State = name
+				d.snapshot.State = heos.PlayState(name)
 				wantNull = name != "pause"
 			case "stale":
 				d.snapshot.Stale, d.snapshot.Verified = true, false
@@ -110,7 +110,7 @@ func TestNowPlayingResponseContractForListDetailAndPreflight(t *testing.T) {
 				d.snapshot.Connected, d.snapshot.Stale, d.snapshot.Verified = false, true, false
 				wantNull = true
 			case "startup":
-				d.snapshot = heos.Snapshot{State: "unknown", Stale: true}
+				d.snapshot = heos.Snapshot{State: heos.PlayStateUnknown, Stale: true}
 				wantNull = true
 			case "missing media":
 				d.snapshot.Media = nil
@@ -250,7 +250,7 @@ func TestNowPlayingProgressContract(t *testing.T) {
 		t.Fatal("unverified media returned a playhead")
 	}
 	d.snapshot.MediaStale = false
-	d.snapshot.State = "stop"
+	d.snapshot.State = heos.PlayStateStop
 	_, stopped := nowPlayingRequest(t, s, "/v1/players/room", 200)
 	if stopped["now_playing"] != nil {
 		t.Fatalf("stop kept now_playing: %v", stopped["now_playing"])

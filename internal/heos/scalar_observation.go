@@ -10,7 +10,7 @@ import (
 // RefreshScalars is a bounded fallback for a scalar command whose event did not
 // arrive. It reads only the relevant controls and never repairs lost event
 // history, an expired full observation or pending media/queue changes.
-func (o *Observer) RefreshScalars(ctx context.Context, kind string) error {
+func (o *Observer) RefreshScalars(ctx context.Context, kind MutationKind) error {
 	fields := scalarFields(kind)
 	if fields == 0 {
 		return ErrBounds
@@ -72,9 +72,9 @@ func (o *Observer) RefreshScalars(ctx context.Context, kind string) error {
 		if err != nil {
 			return err
 		}
-		repeat, shuffle := r.Params.Get("repeat"), r.Params.Get("shuffle")
+		repeat, shuffle := Repeat(r.Params.Get("repeat")), r.Params.Get("shuffle")
 		if len(r.Params["repeat"]) != 1 || len(r.Params["shuffle"]) != 1 ||
-			(repeat != "off" && repeat != "on_one" && repeat != "on_all") || (shuffle != "on" && shuffle != "off") {
+			!repeat.Known() || (shuffle != "on" && shuffle != "off") {
 			return ErrProtocol
 		}
 		s.Repeat, s.Shuffle = repeat, shuffle == "on"
@@ -96,11 +96,11 @@ func (o *Observer) RefreshScalars(ctx context.Context, kind string) error {
 	return nil
 }
 
-func scalarFields(kind string) observedFields {
+func scalarFields(kind MutationKind) observedFields {
 	switch kind {
-	case "volume", "mute":
+	case MutationKindVolume, MutationKindMute:
 		return observedVolume
-	case "mode":
+	case MutationKindMode:
 		return observedRepeat | observedShuffle
 	}
 	return 0
@@ -129,7 +129,7 @@ func (o *Observer) ConfirmScalars(s Snapshot) error {
 		}
 	}
 	if s.Volume == nil || *s.Volume < 0 || *s.Volume > 100 || s.Muted == nil ||
-		(s.Repeat != "off" && s.Repeat != "on_one" && s.Repeat != "on_all") {
+		!s.Repeat.Known() {
 		return ErrProtocol
 	}
 	o.last.Volume, o.last.Muted = clonePtr(s.Volume), clonePtr(s.Muted)

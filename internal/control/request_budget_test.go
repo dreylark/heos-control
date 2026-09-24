@@ -27,7 +27,7 @@ func TestQuietHoldDoesNotPollDevice(t *testing.T) {
 	cmd.Automation = &Automation{TargetLevel: cmd.Level, DurationSeconds: 30}
 	prepared, reads := false, 0
 	d.before = func(m heos.Mutation) {
-		if m.Kind == "queue" {
+		if m.Kind == heos.MutationKindQueue {
 			prepared = true
 		}
 	}
@@ -48,14 +48,14 @@ func TestQuietHoldDoesNotPollDevice(t *testing.T) {
 	if reads != 3 {
 		t.Fatalf("30s quiet hold made %d complete reads; want 3", reads)
 	}
-	if len(d.writes) != 5 || d.writes[4].State != "stop" {
+	if len(d.writes) != 5 || d.writes[4].State != heos.PlayStateStop {
 		t.Fatal(d.writes)
 	}
 }
 
 func TestPendingQueueReadBudgetWithoutEvents(t *testing.T) {
 	c, j, base, req, cmd := albumFixture(t)
-	d := &pendingDevice{albumDevice: base, kind: "queue", states: []string{"unknown"}}
+	d := &pendingDevice{albumDevice: base, kind: "queue", states: []heos.PlayState{heos.PlayStateUnknown}}
 	c.lanes["room"].writer, c.lanes["room"].device.Observer = d, d
 	clock := &advancingClock{now: time.Now()}
 	c.clock = clock
@@ -97,7 +97,7 @@ func TestDuplicateStopWaitHasBoundedReadBudget(t *testing.T) {
 		}
 		stopped = true
 		d.mu.Lock()
-		d.s.State = "stop"
+		d.s.State = heos.PlayStateStop
 		d.mu.Unlock()
 		for range 100 {
 			d.handler(heos.Event{Command: "event/player_state_changed", Params: url.Values{"pid": {"1"}, "state": {"stop"}}})
@@ -129,7 +129,7 @@ func TestVolumeStepsDoNotAddPeriodicReadBeforeSetter(t *testing.T) {
 	cmd.Automation = &Automation{TargetLevel: 20, RampSeconds: 10, DurationSeconds: 10}
 	reads, prepared := 0, false
 	d.before = func(m heos.Mutation) {
-		if m.Kind == "queue" {
+		if m.Kind == heos.MutationKindQueue {
 			prepared = true
 		}
 	}

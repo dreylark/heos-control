@@ -8,10 +8,10 @@ import "github.com/dreylark/heos-control/internal/heos"
 // state/wire guards, ownership checks and no-replay command path.
 func (c *Coordinator) startPlayback(l *lane, r *execution, cmd Command, item heos.Item) error {
 	r.mu.Lock()
-	playing := r.expected.State == "play"
+	playing := r.expected.State == heos.PlayStatePlay
 	r.mu.Unlock()
 	if playing {
-		if err := c.write(l, r, heos.Mutation{Kind: "transport", State: "stop"}); err != nil {
+		if err := c.write(l, r, heos.Mutation{Kind: heos.MutationKindTransport, State: heos.PlayStateStop}); err != nil {
 			return err
 		}
 	}

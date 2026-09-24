@@ -52,7 +52,7 @@ type modeEventDevice struct {
 	clock        *modeEventClock
 	reads        []time.Time
 	scalarReads  []time.Time
-	onScalarRead func(string) error
+	onScalarRead func(heos.MutationKind) error
 	onWrite      func(heos.Mutation) error
 	onRead       func() error
 	lastGuard    heos.Guard
@@ -70,7 +70,7 @@ func (d *modeEventDevice) Refresh(ctx context.Context) error {
 }
 
 // A mode fallback reads only mode fields and does not renew the full baseline.
-func (d *modeEventDevice) RefreshScalars(ctx context.Context, kind string) error {
+func (d *modeEventDevice) RefreshScalars(ctx context.Context, kind heos.MutationKind) error {
 	d.scalarReads = append(d.scalarReads, d.clock.Now())
 	if d.onScalarRead != nil {
 		if err := d.onScalarRead(kind); err != nil {
@@ -91,7 +91,7 @@ func (d *modeEventDevice) Write(ctx context.Context, m heos.Mutation, g heos.Gua
 		}
 	}
 	// Mode application is controlled separately from the successful reply.
-	if m.Kind == "mute" {
+	if m.Kind == heos.MutationKindMute {
 		muted := m.Muted
 		d.s.Muted = &muted
 	}
@@ -127,7 +127,7 @@ func TestModeWaitsForEventsWithoutFullReadback(t *testing.T) {
 		t.Run(scenario, func(t *testing.T) {
 			c, r, d, clock := modeEventFixture(t)
 			began := clock.Now()
-			m := heos.Mutation{Kind: "mode", Repeat: "off", Shuffle: true}
+			m := heos.Mutation{Kind: heos.MutationKindMode, Repeat: heos.RepeatOff, Shuffle: true}
 			at := func(ms int, fn func()) {
 				clock.events = append(clock.events, modeClockEvent{began.Add(time.Duration(ms) * time.Millisecond), fn})
 			}
@@ -140,8 +140,8 @@ func TestModeWaitsForEventsWithoutFullReadback(t *testing.T) {
 				d.onWrite = func(heos.Mutation) error { shuffle(); return clock.Wait(r.ctx, 100*time.Millisecond, nil) }
 				wantElapsed = 100 * time.Millisecond
 			case "both-fields", "reverse-order", "partial-missing":
-				d.s.Repeat, r.expected.Repeat = "on_all", "on_all"
-				repeat := func() { d.s.Repeat = "off"; r.event(modeEvent("repeat", "off")) }
+				d.s.Repeat, r.expected.Repeat = heos.RepeatOnAll, "on_all"
+				repeat := func() { d.s.Repeat = heos.RepeatOff; r.event(modeEvent("repeat", "off")) }
 				if scenario == "reverse-order" {
 					at(100, shuffle)
 					at(400, repeat)
@@ -166,7 +166,7 @@ func TestModeWaitsForEventsWithoutFullReadback(t *testing.T) {
 				wantElapsed = 0
 			case "repeat-only":
 				d.s.Repeat, r.expected.Repeat, m.Shuffle = "on_all", "on_all", false
-				at(350, func() { d.s.Repeat = "off"; r.event(modeEvent("repeat", "off")) })
+				at(350, func() { d.s.Repeat = heos.RepeatOff; r.event(modeEvent("repeat", "off")) })
 			case "disable-shuffle":
 				d.s.Shuffle, r.expected.Shuffle, m.Shuffle = true, true, false
 				at(350, func() { d.s.Shuffle = false; r.event(modeEvent("shuffle", "off")) })
@@ -278,7 +278,7 @@ func TestModeWaitCancelsWithoutAnotherReadOrWrite(t *testing.T) {
 				}
 				r.event(e)
 			}}}
-			err := c.write(c.lanes["room"], r, heos.Mutation{Kind: "mode", Repeat: "off", Shuffle: true})
+			err := c.write(c.lanes["room"], r, heos.Mutation{Kind: heos.MutationKindMode, Repeat: heos.RepeatOff, Shuffle: true})
 			want, wantElapsed := ErrOwnership, 100*time.Millisecond
 			switch scenario {
 			case "context":
@@ -300,11 +300,11 @@ func TestModeConfirmedChainGuardsFollowingScalarWrites(t *testing.T) {
 		t.Run(scenario, func(t *testing.T) {
 			c, r, d, clock := modeEventFixture(t)
 			d.onWrite = func(m heos.Mutation) error {
-				if m.Kind == "mode" {
+				if m.Kind == heos.MutationKindMode {
 					d.s.Shuffle = true
 					r.event(modeEvent("shuffle", "on"))
 				}
-				if m.Kind == "mute" {
+				if m.Kind == heos.MutationKindMute {
 					muted := m.Muted
 					d.s.Muted = &muted
 					value := "off"
@@ -316,7 +316,7 @@ func TestModeConfirmedChainGuardsFollowingScalarWrites(t *testing.T) {
 				return nil
 			}
 			l := c.lanes["room"]
-			if err := c.write(l, r, heos.Mutation{Kind: "mode", Repeat: "off", Shuffle: true}); err != nil {
+			if err := c.write(l, r, heos.Mutation{Kind: heos.MutationKindMode, Repeat: heos.RepeatOff, Shuffle: true}); err != nil {
 				t.Fatal(err)
 			}
 			if len(d.reads) != 1 {
@@ -361,7 +361,7 @@ func TestModeConfirmedChainGuardsFollowingScalarWrites(t *testing.T) {
 				j.mu.Unlock()
 				reject = true
 			}
-			err := c.write(l, r, heos.Mutation{Kind: "mute", Muted: scenario == "different-command"})
+			err := c.write(l, r, heos.Mutation{Kind: heos.MutationKindMute, Muted: scenario == "different-command"})
 			if reject {
 				if err == nil || len(d.writes) != 1 {
 					t.Fatalf("unsafe chain reused: %v %+v", err, d.writes)
@@ -381,7 +381,7 @@ func TestModeConfirmedChainGuardsFollowingScalarWrites(t *testing.T) {
 			if remaining := time.Until(d.lastGuard.ExpiresAt); remaining <= 4*time.Second || remaining > 5*time.Second {
 				t.Fatal("guard is not bounded from current validation time", d.lastGuard)
 			}
-			if err := c.write(l, r, heos.Mutation{Kind: "mute", Muted: false}); err != nil {
+			if err := c.write(l, r, heos.Mutation{Kind: heos.MutationKindMute, Muted: false}); err != nil {
 				t.Fatal(err)
 			}
 			if len(d.reads) != wantReads {
@@ -393,12 +393,12 @@ func TestModeConfirmedChainGuardsFollowingScalarWrites(t *testing.T) {
 
 func TestModePartialDuplicateEventsCannotRenewConfirmationDeadline(t *testing.T) {
 	c, r, d, clock := modeEventFixture(t)
-	d.s.Repeat, r.expected.Repeat = "on_all", "on_all"
+	d.s.Repeat, r.expected.Repeat = heos.RepeatOnAll, "on_all"
 	began := clock.Now()
 	for ms := 100; ms <= 12000; ms += 100 {
-		clock.events = append(clock.events, modeClockEvent{began.Add(time.Duration(ms) * time.Millisecond), func() { d.s.Repeat = "off"; r.event(modeEvent("repeat", "off")) }})
+		clock.events = append(clock.events, modeClockEvent{began.Add(time.Duration(ms) * time.Millisecond), func() { d.s.Repeat = heos.RepeatOff; r.event(modeEvent("repeat", "off")) }})
 	}
-	err := c.write(c.lanes["room"], r, heos.Mutation{Kind: "mode", Repeat: "off", Shuffle: true})
+	err := c.write(c.lanes["room"], r, heos.Mutation{Kind: heos.MutationKindMode, Repeat: heos.RepeatOff, Shuffle: true})
 	if !errors.Is(err, context.DeadlineExceeded) || len(d.reads) != 1 || len(d.scalarReads) != 1 || len(d.writes) != 1 || r.confirmed != 0 || clock.Now().Sub(began) != 11*time.Second {
 		t.Fatalf("partial events completed mode or extended budget: %v full=%d fallback=%d writes=%d confirmed=%d elapsed=%s", err, len(d.reads), len(d.scalarReads), len(d.writes), r.confirmed, clock.Now().Sub(began))
 	}
@@ -410,8 +410,8 @@ func TestModeFallbackErrorsNeverReplayOrAdvancePreparation(t *testing.T) {
 			c, r, d, clock := modeEventFixture(t)
 			began := clock.Now()
 			readErr := errors.New("targeted read failed")
-			d.onScalarRead = func(kind string) error {
-				if kind != "mode" {
+			d.onScalarRead = func(kind heos.MutationKind) error {
+				if kind != heos.MutationKindMode {
 					t.Fatal("unexpected fallback", kind)
 				}
 				d.s.Repeat, d.s.Shuffle = "off", true
@@ -431,13 +431,13 @@ func TestModeFallbackErrorsNeverReplayOrAdvancePreparation(t *testing.T) {
 				case "stale":
 					d.s.Stale = true
 				case "old-repeat":
-					d.s.Repeat = "on_all"
+					d.s.Repeat = heos.RepeatOnAll
 				case "old-shuffle":
 					d.s.Shuffle = false
 				}
 				return nil
 			}
-			err := c.write(c.lanes["room"], r, heos.Mutation{Kind: "mode", Repeat: "off", Shuffle: true})
+			err := c.write(c.lanes["room"], r, heos.Mutation{Kind: heos.MutationKindMode, Repeat: heos.RepeatOff, Shuffle: true})
 			if err == nil || r.confirmed != 0 || len(d.writes) != 1 || len(d.reads) != 1 || len(d.scalarReads) != 1 || clock.Now().Sub(began) != 11*time.Second {
 				t.Fatalf("bad fallback outcome: %v full=%d fallback=%d writes=%d", err, len(d.reads), len(d.scalarReads), len(d.writes))
 			}
@@ -453,7 +453,7 @@ func TestModeConfirmedChainAuditDetectsSilentIntervention(t *testing.T) {
 		t.Run(field, func(t *testing.T) {
 			c, r, d, clock := modeEventFixture(t)
 			d.onWrite = func(heos.Mutation) error { d.s.Shuffle = true; r.event(modeEvent("shuffle", "on")); return nil }
-			if err := c.write(c.lanes["room"], r, heos.Mutation{Kind: "mode", Repeat: "off", Shuffle: true}); err != nil {
+			if err := c.write(c.lanes["room"], r, heos.Mutation{Kind: heos.MutationKindMode, Repeat: heos.RepeatOff, Shuffle: true}); err != nil {
 				t.Fatal(err)
 			}
 			clock.now = clock.now.Add(300 * time.Second)
@@ -465,7 +465,7 @@ func TestModeConfirmedChainAuditDetectsSilentIntervention(t *testing.T) {
 				v := true
 				d.s.Muted = &v
 			case "state":
-				d.s.State = "stop"
+				d.s.State = heos.PlayStateStop
 			case "media":
 				d.s.Media = &heos.Media{Source: "foreign", ID: "foreign"}
 			case "queue":
@@ -477,7 +477,7 @@ func TestModeConfirmedChainAuditDetectsSilentIntervention(t *testing.T) {
 			case "identity":
 				d.s.Player.Serial = "foreign"
 			}
-			if err := c.write(c.lanes["room"], r, heos.Mutation{Kind: "mute", Muted: false}); err == nil || len(d.writes) != 1 || len(d.reads) != 2 {
+			if err := c.write(c.lanes["room"], r, heos.Mutation{Kind: heos.MutationKindMute, Muted: false}); err == nil || len(d.writes) != 1 || len(d.reads) != 2 {
 				t.Fatalf("audit adopted intervention: %v writes=%d reads=%d", err, len(d.writes), len(d.reads))
 			}
 		})
@@ -491,7 +491,7 @@ func TestModeFailedSetterDoesNotEnterConfirmation(t *testing.T) {
 			began := clock.Now()
 			cause := &heos.CommandError{Delivery: delivery, Cause: heos.ErrProtocol}
 			d.onWrite = func(heos.Mutation) error { return cause }
-			err := c.write(c.lanes["room"], r, heos.Mutation{Kind: "mode", Repeat: "off", Shuffle: true})
+			err := c.write(c.lanes["room"], r, heos.Mutation{Kind: heos.MutationKindMode, Repeat: heos.RepeatOff, Shuffle: true})
 			if !errors.Is(err, cause) || len(d.reads) != 1 || len(d.scalarReads) != 0 || len(d.writes) != 1 || clock.Now() != began {
 				t.Fatalf("failed setter waited/replayed: %v full=%d fallback=%d writes=%d", err, len(d.reads), len(d.scalarReads), len(d.writes))
 			}
@@ -504,7 +504,7 @@ func TestModeLateConfirmedEventsDoNotBorrowEarlierTargets(t *testing.T) {
 		t.Run(fmt.Sprint(reversal), func(t *testing.T) {
 			c, r, d, _ := modeEventFixture(t)
 			d.onWrite = func(heos.Mutation) error { d.s.Shuffle = true; r.event(modeEvent("shuffle", "on")); return nil }
-			if err := c.write(c.lanes["room"], r, heos.Mutation{Kind: "mode", Repeat: "off", Shuffle: true}); err != nil {
+			if err := c.write(c.lanes["room"], r, heos.Mutation{Kind: heos.MutationKindMode, Repeat: heos.RepeatOff, Shuffle: true}); err != nil {
 				t.Fatal(err)
 			}
 			for range 3 {
@@ -524,7 +524,7 @@ func TestModeLateConfirmedEventsDoNotBorrowEarlierTargets(t *testing.T) {
 				}
 				return nil
 			}
-			err := c.write(c.lanes["room"], r, heos.Mutation{Kind: "mode", Repeat: "off", Shuffle: false})
+			err := c.write(c.lanes["room"], r, heos.Mutation{Kind: heos.MutationKindMode, Repeat: heos.RepeatOff, Shuffle: false})
 			if reversal {
 				if !errors.Is(err, ErrOwnership) {
 					t.Fatal("confirmed field reversal accepted", err)

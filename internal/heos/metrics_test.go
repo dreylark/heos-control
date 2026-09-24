@@ -241,7 +241,7 @@ func TestObservationMetricsCountReadsNotCacheOrRejectedBaselines(t *testing.T) {
 	if server.commands.Load() != initial {
 		t.Fatal("metrics or cache reuse added wire commands")
 	}
-	if err := observer.RefreshScalars(WithObservationTrigger(context.Background(), "fallback"), "volume"); err != nil {
+	if err := observer.RefreshScalars(WithObservationTrigger(context.Background(), "fallback"), MutationKindVolume); err != nil {
 		t.Fatal(err)
 	}
 	if err := observer.RefreshPlayback(WithObservationTrigger(context.Background(), "confirmation")); err != nil {
@@ -267,7 +267,7 @@ func TestObservationMetricsCountReadsNotCacheOrRejectedBaselines(t *testing.T) {
 	observer.invalid = true
 	observer.mu.Unlock()
 	before := server.commands.Load()
-	if err := observer.RefreshScalars(WithObservationTrigger(context.Background(), "fallback"), "volume"); !errors.Is(err, ErrStale) {
+	if err := observer.RefreshScalars(WithObservationTrigger(context.Background(), "fallback"), MutationKindVolume); !errors.Is(err, ErrStale) {
 		t.Fatal(err)
 	}
 	if err := observer.RefreshPlayback(WithObservationTrigger(context.Background(), "confirmation")); !errors.Is(err, ErrStale) {
@@ -317,7 +317,7 @@ func TestObservationMetricsIncludeFailedReadAttempts(t *testing.T) {
 				observer.Notify(<-client.Events())
 				err = observer.Reconcile(ctx)
 			case "scalars":
-				err = observer.RefreshScalars(ctx, "volume")
+				err = observer.RefreshScalars(ctx, MutationKindVolume)
 			case "playback":
 				err = observer.RefreshPlayback(ctx)
 			}

@@ -20,7 +20,7 @@ const (
 // These are values captured under the execution mutex, not another mutable FSM.
 type queuePolicyState struct {
 	Owned, Automating bool
-	ExpectedState     string
+	ExpectedState     heos.PlayState
 	WaitUntil         time.Time
 	PlaybackUntil     time.Time
 }
@@ -46,9 +46,9 @@ type queueDecision struct {
 func decideQueueEvent(state queuePolicyState, event heos.Event, now time.Time) queueDecision {
 	data := event.Data()
 	waiting := !state.WaitUntil.IsZero()
-	play := data.Kind == heos.EventState && data.State == "play"
+	play := data.Kind == heos.EventState && data.State == heos.PlayStatePlay
 	transition := data.Kind == heos.EventState && state.Automating &&
-		(data.State == "stop" || data.State == "unknown")
+		(data.State == heos.PlayStateStop || data.State == heos.PlayStateUnknown)
 	d := queueDecision{Action: queuePass, Rule: "event_not_attributed", WaitUntil: state.WaitUntil}
 	// First matching rule wins. Attribution to our own Stop happens before this
 	// table; it must never start another transition wait.
@@ -60,7 +60,7 @@ func decideQueueEvent(state queuePolicyState, event heos.Event, now time.Time) q
 	}{
 		{"queue_not_owned", !state.Owned, queuePass, false},
 		{"media_notification", data.Kind == heos.EventNowPlaying, queueObserve, true},
-		{"unexpected_play", play && state.ExpectedState != "play", queuePass, waiting},
+		{"unexpected_play", play && state.ExpectedState != heos.PlayStatePlay, queuePass, waiting},
 		{"play_requires_observation", play && waiting, queueObserve, true},
 		{"play_unchanged", play, queueIgnore, false},
 		{"transport_already_pending", transition && waiting, queueIgnore, false},
@@ -82,9 +82,9 @@ func decideQueueEvent(state queuePolicyState, event heos.Event, now time.Time) q
 // Snapshots and deadlines are values; the caller applies the decision under the
 // same mutex as the event callback so an older Play cannot clear a newer Stop.
 func decideQueueObservation(state queuePolicyState, facts queueObservationFacts) queueDecision {
-	active := state.Owned && state.Automating && state.ExpectedState == "play"
-	pending := facts.Observed.State == "stop" || facts.Observed.State == "unknown" ||
-		(facts.Observed.State == "play" && transitionalQueueMedia(facts.Before.Queue, facts.Observed.Media))
+	active := state.Owned && state.Automating && state.ExpectedState == heos.PlayStatePlay
+	pending := facts.Observed.State == heos.PlayStateStop || facts.Observed.State == heos.PlayStateUnknown ||
+		(facts.Observed.State == heos.PlayStatePlay && transitionalQueueMedia(facts.Before.Queue, facts.Observed.Media))
 	waitUntil := state.WaitUntil
 	if active && pending && waitUntil.IsZero() {
 		waitUntil = facts.Now.Add(playbackConfirmationTimeout)
@@ -111,9 +111,9 @@ func decideQueueObservation(state queuePolicyState, facts queueObservationFacts)
 		{"operation_cancelled", facts.Cancellation != nil, queueRelease, facts.Cancellation},
 		{"observation_unsafe", facts.Unsafe != nil, queueRelease, facts.Unsafe},
 		{"queue_controls_changed", changed != nil, queueRelease, changed},
-		{"play_confirmed", facts.Observed.State == "play" && queuedMedia(facts.Before.Queue, facts.Observed.Media) && !facts.PendingEvents, queueResume, nil},
+		{"play_confirmed", facts.Observed.State == heos.PlayStatePlay && queuedMedia(facts.Before.Queue, facts.Observed.Media) && !facts.PendingEvents, queueResume, nil},
 		{"events_pending", facts.PendingEvents, queueWait, nil},
-		{"transport_pending", facts.Observed.State != "play", queueWait, nil},
+		{"transport_pending", facts.Observed.State != heos.PlayStatePlay, queueWait, nil},
 	} {
 		if rule.when {
 			d.Action, d.Rule, d.Err = rule.action, rule.name, rule.err
@@ -131,7 +131,7 @@ func transitionChanges(before, after heos.Snapshot) []string {
 		return []string{"connection_generation"}
 	}
 	switch after.State {
-	case "stop", "unknown", "play":
+	case heos.PlayStateStop, heos.PlayStateUnknown, heos.PlayStatePlay:
 		before.State = after.State
 	default:
 		return []string{"state"}
@@ -139,7 +139,7 @@ func transitionChanges(before, after heos.Snapshot) []string {
 	// Home 150 can update MID/QID separately, even while state remains Play
 	// (Denon 4.2.5/4.2.15, event 5.5). Only read-only waiting accepts that pair;
 	// confirmation still requires exact membership in the unchanged queue.
-	pendingIdentity := after.State != "play" && queuedIdentity(before.Queue, after.Media)
+	pendingIdentity := after.State != heos.PlayStatePlay && queuedIdentity(before.Queue, after.Media)
 	if emptyMedia(after.Media) || queuedMedia(before.Queue, after.Media) || pendingIdentity || transitionalQueueMedia(before.Queue, after.Media) {
 		before.Media = after.Media
 	}

@@ -40,7 +40,7 @@ func (c *Coordinator) confirmReadback(l *lane, r *execution, m heos.Mutation, be
 		}
 		after, err := c.observeRun(ctx, l, r, reuse)
 		reuse = true
-		if err == nil && m.Kind == "skip" {
+		if err == nil && m.Kind == heos.MutationKindSkip {
 			after, err = completeQueue(ctx, l, after)
 		}
 		if !c.clock.Now().Before(deadline) {
@@ -49,7 +49,7 @@ func (c *Coordinator) confirmReadback(l *lane, r *execution, m heos.Mutation, be
 		if err == nil {
 			c.traceSnapshot(r, "pending_readback", after)
 			switch m.Kind {
-			case "queue":
+			case heos.MutationKindQueue:
 				d := c.queueStartObservation(ctx, l, r, before, after, deadline)
 				if c.logger != nil && d.Rule != lastQueueRule {
 					c.logger.Debug("queue start confirmation decision", "operation_id", r.id, "action", d.Action, "rule", d.Rule, "timeout_at", deadline)
@@ -61,7 +61,7 @@ func (c *Coordinator) confirmReadback(l *lane, r *execution, m heos.Mutation, be
 				case queueStartAbort:
 					return after, d.Err
 				}
-			case "skip":
+			case heos.MutationKindSkip:
 				if err = deviceObservationSafety(l.device.Config, after); err != nil {
 					return after, err
 				}
@@ -117,13 +117,13 @@ func (c *Coordinator) queueStartObservation(ctx context.Context, l *lane, r *exe
 // A read can confirm play before its notification or before the queue is ready.
 // Close the loading-stop allowance immediately, retaining a late play event.
 // Call with r.mu held, together with the initial queue decision and event check.
-func (r *execution) observeQueueState(state string) {
-	if state == "play" {
+func (r *execution) observeQueueState(state heos.PlayState) {
+	if state == heos.PlayStatePlay {
 		r.queueStart = queuePlayObserved
 		name := "event/player_state_changed"
 		pending := r.events[name][:0]
 		for _, want := range r.events[name] {
-			if want["state"] != "stop" {
+			if want["state"] != string(heos.PlayStateStop) {
 				pending = append(pending, want)
 			}
 		}
@@ -145,7 +145,7 @@ func pendingChanges(before, after heos.Snapshot, m heos.Mutation) []string {
 		return []string{"connection_generation"}
 	}
 	switch m.Kind {
-	case "mode":
+	case heos.MutationKindMode:
 		// Only unchanged or requested values may be pending (Denon
 		// 4.2.13/4.2.14). Keep every other control and queue check intact.
 		if after.Repeat == m.Repeat {
@@ -154,13 +154,13 @@ func pendingChanges(before, after heos.Snapshot, m heos.Mutation) []string {
 		if after.Shuffle == m.Shuffle {
 			before.Shuffle = after.Shuffle
 		}
-	case "transport":
-		if after.State == "unknown" {
+	case heos.MutationKindTransport:
+		if after.State == heos.PlayStateUnknown {
 			before.State = after.State
 		}
 		before = transportMediaReadback(before, after, m.State, true)
-	case "skip":
-		if after.State == "play" || after.State == "pause" || after.State == "stop" || after.State == "unknown" {
+	case heos.MutationKindSkip:
+		if after.State.Known() {
 			before.State = after.State
 		}
 		// MID and QID can settle separately. Only identifiers from this same
@@ -175,7 +175,7 @@ func pendingChanges(before, after heos.Snapshot, m heos.Mutation) []string {
 // A stopping Home 150 can clear media or reset its position in the unchanged
 // queue. This never accepts a foreign MID/QID or hides other control changes.
 func stoppedReadback(before, after heos.Snapshot) heos.Snapshot {
-	if after.State == "unknown" || after.State == "stop" {
+	if after.State == heos.PlayStateUnknown || after.State == heos.PlayStateStop {
 		before.State = after.State
 		if emptyMedia(after.Media) || queuedMedia(before.Queue, after.Media) {
 			before.Media = after.Media
@@ -187,14 +187,14 @@ func stoppedReadback(before, after heos.Snapshot) heos.Snapshot {
 // Resuming a stopped shuffled queue can select another queued track. While
 // loading, its MID can precede its QID; final Play still needs the exact pair.
 // Transport never authorizes a different queue or foreign source/media.
-func transportMediaReadback(before, after heos.Snapshot, target string, pending bool) heos.Snapshot {
+func transportMediaReadback(before, after heos.Snapshot, target heos.PlayState, pending bool) heos.Snapshot {
 	switch target {
-	case "stop":
+	case heos.PlayStateStop:
 		return stoppedReadback(before, after)
-	case "play":
+	case heos.PlayStatePlay:
 		if queuedMedia(before.Queue, after.Media) {
 			before.Media = after.Media
-		} else if pending && after.State != "play" && (emptyMedia(after.Media) || queuedIdentity(before.Queue, after.Media)) {
+		} else if pending && after.State != heos.PlayStatePlay && (emptyMedia(after.Media) || queuedIdentity(before.Queue, after.Media)) {
 			before.Media = after.Media
 		}
 	}
@@ -215,14 +215,14 @@ func queuedIdentity(queue heos.QueuePage, media *heos.Media) bool {
 
 // Only read-only confirmation uses these transitional states. Admission and
 // every subsequent mutation still require an ordinary known playback state.
-func queueStatePending(before, after string, started bool) bool {
+func queueStatePending(before, after heos.PlayState, started bool) bool {
 	switch after {
-	case "play", "unknown":
+	case heos.PlayStatePlay, heos.PlayStateUnknown:
 		return true
-	case "stop":
-		return !started && (before == "stop" || before == "pause")
-	case "pause":
-		return !started && before == "pause"
+	case heos.PlayStateStop:
+		return !started && (before == heos.PlayStateStop || before == heos.PlayStatePause)
+	case heos.PlayStatePause:
+		return !started && before == heos.PlayStatePause
 	default:
 		return false
 	}

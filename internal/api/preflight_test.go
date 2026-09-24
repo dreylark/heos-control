@@ -16,14 +16,14 @@ import (
 
 type preflightDevice struct {
 	calls int
-	state string
+	state heos.PlayState
 }
 
 func (d *preflightDevice) Snapshot() heos.Snapshot {
 	v, m := 10, false
 	state := d.state
-	if state == "" {
-		state = "stop"
+	if state == heos.PlayStateAbsent {
+		state = heos.PlayStateStop
 	}
 	return heos.Snapshot{Player: heos.Player{ID: "1", Serial: "serial"}, State: state, Volume: &v, Muted: &m, Connected: true, Verified: true, ObservedAt: time.Unix(100, 0)}
 }

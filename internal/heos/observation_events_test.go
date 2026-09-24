@@ -45,7 +45,7 @@ func TestObservationAppliesCompleteEventsWithoutReads(t *testing.T) {
 		deliverObservationEvent(c, o, "event/"+e.command, "pid=9007199254740993&"+e.params)
 	}
 	s := o.Snapshot()
-	if s.Stale || !s.Verified || !s.EventUpdated || *s.Volume != 20 || !*s.Muted || s.State != "play" || s.Repeat != "on_one" || s.Shuffle {
+	if s.Stale || !s.Verified || !s.EventUpdated || *s.Volume != 20 || !*s.Muted || s.State != PlayStatePlay || s.Repeat != RepeatOnOne || s.Shuffle {
 		t.Fatalf("event projection: %+v", s)
 	}
 	if reads.Load() != count || callbacks.Load() != 5 || len(o.wake) != 0 {
@@ -143,14 +143,14 @@ func TestPlayheadSampleIsDisplayOnly(t *testing.T) {
 	if s = o.Snapshot(); s.Stale || len(o.wake) != 0 || s.Playhead.PositionMS != 10 || server.commands.Load() != commands {
 		t.Fatalf("foreign or oversized progress changed observation: %+v", s.Playhead)
 	}
-	for _, state := range []string{"play", "pause"} {
-		deliverObservationEvent(c, o, "event/player_state_changed", "pid=9007199254740993&state="+state)
+	for _, state := range []PlayState{PlayStatePlay, PlayStatePause} {
+		deliverObservationEvent(c, o, "event/player_state_changed", "pid=9007199254740993&state="+string(state))
 		if s = o.Snapshot(); s.Playhead == nil || s.Playhead.PositionMS != 10 || s.State != state || s.ObservedAt != before.ObservedAt {
 			t.Fatalf("%s cleared the sample: %+v", state, s.Playhead)
 		}
 	}
 	deliverObservationEvent(c, o, "event/player_state_changed", "pid=9007199254740993&state=stop")
-	if s = o.Snapshot(); s.Playhead != nil || s.State != "stop" || !s.MediaStale || s.ObservedAt != before.ObservedAt || len(o.wake) != 0 {
+	if s = o.Snapshot(); s.Playhead != nil || s.State != PlayStateStop || !s.MediaStale || s.ObservedAt != before.ObservedAt || len(o.wake) != 0 {
 		t.Fatalf("stop kept a playhead or scheduled a read: %+v wake=%d", s.Playhead, len(o.wake))
 	}
 }
@@ -219,7 +219,7 @@ func TestPlayheadSampleDuringTargetedRead(t *testing.T) {
 		run           func(*Observer) error
 	}{
 		{name: "playback", command: "player/get_now_playing_media", run: func(o *Observer) error { return o.RefreshPlayback(context.Background()) }},
-		{name: "scalars", command: "player/get_mute", run: func(o *Observer) error { return o.RefreshScalars(context.Background(), "volume") }},
+		{name: "scalars", command: "player/get_mute", run: func(o *Observer) error { return o.RefreshScalars(context.Background(), MutationKindVolume) }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var race atomic.Bool

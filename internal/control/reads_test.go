@@ -16,7 +16,7 @@ func (s *observationStub) Refresh(context.Context) error { return nil }
 
 func TestPlayerIncludesVolumeCeiling(t *testing.T) {
 	ceiling := 40
-	s := &observationStub{value: heos.Snapshot{Key: "room", State: "stop", ObservedAt: time.Now(), Connected: true, Verified: true}}
+	s := &observationStub{value: heos.Snapshot{Key: "room", State: heos.PlayStateStop, ObservedAt: time.Now(), Connected: true, Verified: true}}
 	with, err := NewReads("epoch", []Device{{Config: config.Player{Key: "room", Serial: "serial", VolumeCeiling: &ceiling}, Observer: s}}, nil).Player("room")
 	if err != nil || with.VolumeCeiling == nil || *with.VolumeCeiling != 40 || with.VolumeCeiling == &ceiling {
 		t.Fatalf("%+v %v", with, err)
@@ -29,7 +29,7 @@ func TestPlayerIncludesVolumeCeiling(t *testing.T) {
 
 func TestUnknownPlayerRevision(t *testing.T) {
 	p := config.Player{Key: "room", Serial: "serial"}
-	s := &observationStub{value: heos.Snapshot{Key: "room", State: "unknown", Stale: true}}
+	s := &observationStub{value: heos.Snapshot{Key: "room", State: heos.PlayStateUnknown, Stale: true}}
 	a := NewReads("epoch-a", []Device{{Config: p, Observer: s}}, nil)
 	b := NewReads("epoch-b", []Device{{Config: p, Observer: s}}, nil)
 	av, _ := a.Player("room")
@@ -38,7 +38,7 @@ func TestUnknownPlayerRevision(t *testing.T) {
 		t.Fatalf("unknown state fabricated: %+v", av)
 	}
 	old := av.Revision
-	s.value = heos.Snapshot{Key: "room", State: "pause", ObservedAt: time.Now(), Connected: true, Verified: true}
+	s.value = heos.Snapshot{Key: "room", State: heos.PlayStatePause, ObservedAt: time.Now(), Connected: true, Verified: true}
 	av, _ = a.Player("room")
 	if av.Revision == old {
 		t.Fatal("freshness did not fence revision")

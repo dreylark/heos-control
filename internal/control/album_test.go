@@ -52,7 +52,7 @@ func (d *albumDevice) BrowseAll(_ context.Context, sid, _ heos.ID) ([]heos.Item,
 }
 func (d *albumDevice) Write(ctx context.Context, m heos.Mutation, guard heos.Guard) (heos.Response, error) {
 	response, err := d.fakeDevice.Write(ctx, m, guard)
-	if err == nil && m.Kind == "queue" {
+	if err == nil && m.Kind == heos.MutationKindQueue {
 		d.mu.Lock()
 		total := len(d.tracks)
 		d.s.Queue = heos.QueuePage{Items: append([]heos.Media(nil), d.tracks...), Total: &total}
@@ -89,14 +89,14 @@ func TestQueuePreparationMediaNotificationsRequireOwnershipReadback(t *testing.T
 		t.Run(scenario, func(t *testing.T) {
 			c, j, d, req, cmd := albumFixture(t)
 			if strings.HasPrefix(scenario, "paused-") {
-				d.s.State = "pause"
+				d.s.State = heos.PlayStatePause
 				p, _ := c.reads.Player("room")
 				req.IfMatch = fmt.Sprintf("%q", p.Revision)
 				scenario = strings.TrimPrefix(scenario, "paused-")
 			}
 			c.clock = &advancingClock{now: time.Now()}
 			d.before = func(m heos.Mutation) {
-				if m.Kind != "queue" {
+				if m.Kind != heos.MutationKindQueue {
 					return
 				}
 				for range 2 {
@@ -139,7 +139,7 @@ func TestQueuePreparationMediaNotificationsRequireOwnershipReadback(t *testing.T
 			d.mu.Lock()
 			defer d.mu.Unlock()
 			for _, m := range d.writes {
-				if m.Kind == "transport" || (m.Kind == "volume" && m.Level != cmd.Level) {
+				if m.Kind == heos.MutationKindTransport || (m.Kind == heos.MutationKindVolume && m.Level != cmd.Level) {
 					t.Fatal("automation continued after invalid preparation", d.writes)
 				}
 			}
@@ -208,7 +208,7 @@ type transitionRaceDevice struct {
 }
 
 func (d *transitionRaceDevice) Write(ctx context.Context, m heos.Mutation, g heos.Guard) (heos.Response, error) {
-	if m.Kind == "volume" && m.Level == 11 {
+	if m.Kind == heos.MutationKindVolume && m.Level == 11 {
 		d.attempts++
 		if d.attempts == 1 {
 			d.mu.Lock()
@@ -270,7 +270,7 @@ func TestQueueCompletionRemovesRemainingTimers(t *testing.T) {
 		}
 		completed = true
 		d.mu.Lock()
-		d.s.State = "stop"
+		d.s.State = heos.PlayStateStop
 		d.s.Media = &heos.Media{}
 		count = len(d.writes)
 		handler := d.handler
@@ -311,7 +311,7 @@ func TestOwnedCancellationAfterInQueueSkip(t *testing.T) {
 	handler(heos.Event{Command: "event/player_now_playing_changed", Params: url.Values{"pid": {"1"}}})
 	req.Key, req.IfMatch = "cancel", ""
 	req.Endpoint = "/v1/operations/" + a.ID + "/cancel"
-	b, err := c.Submit(context.Background(), req, Command{Kind: "cancel", Target: a.ID, Mode: "stop_owned"})
+	b, err := c.Submit(context.Background(), req, Command{Kind: CommandKindCancel, Target: a.ID, Mode: "stop_owned"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -323,7 +323,7 @@ func TestOwnedCancellationAfterInQueueSkip(t *testing.T) {
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if len(d.writes) != 5 || d.writes[4].State != "stop" {
+	if len(d.writes) != 5 || d.writes[4].State != heos.PlayStateStop {
 		t.Fatal(d.writes)
 	}
 }
@@ -362,7 +362,7 @@ func TestAlbumTransitionsPreserveFullAutomationWindow(t *testing.T) {
 			}
 			d.mu.Lock()
 			defer d.mu.Unlock()
-			if d.s.State != "stop" || *d.s.Volume != 0 || len(d.writes) != 75 {
+			if d.s.State != heos.PlayStateStop || *d.s.Volume != 0 || len(d.writes) != 75 {
 				t.Fatal("ramp/fade/stop changed across tracks", d.s.State, *d.s.Volume, len(d.writes))
 			}
 		})

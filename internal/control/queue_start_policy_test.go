@@ -17,7 +17,7 @@ func queueStartFixture() queueStartFacts {
 	old := heos.Media{Source: "1024", ID: "old", QueueID: "1"}
 	first := heos.Media{Source: "1024", ID: "first", QueueID: "1"}
 	second := heos.Media{Source: "1024", ID: "second", QueueID: "2"}
-	before := heos.Snapshot{State: "stop", Volume: &v, Muted: &muted, Repeat: "off", Shuffle: true,
+	before := heos.Snapshot{State: heos.PlayStateStop, Volume: &v, Muted: &muted, Repeat: heos.RepeatOff, Shuffle: true,
 		Media: &old, Queue: heos.QueuePage{Items: []heos.Media{old}}}
 	after := before
 	after.State, after.Media = "play", &second
@@ -27,7 +27,7 @@ func queueStartFixture() queueStartFacts {
 }
 
 func unresolvedQueueStart(f *queueStartFacts) {
-	f.Observed.State = "unknown"
+	f.Observed.State = heos.PlayStateUnknown
 	f.Observed.Media.ID = "loading-mid"
 }
 
@@ -51,7 +51,7 @@ func TestQueueStartDecisionTable(t *testing.T) {
 		{"new-event-before-confirmation", func(f *queueStartFacts) { f.PendingEvents = true }, queueStartWait, "events_pending", nil},
 		{"old-state", func(f *queueStartFacts) { f.Observed = f.Before }, queueStartWait, "queue_loading", nil},
 		{"missing-media", func(f *queueStartFacts) { f.Observed.Media = nil }, queueStartWait, "queue_loading", nil},
-		{"selected-unknown", func(f *queueStartFacts) { f.Observed.State = "unknown" }, queueStartWait, "queue_loading", nil},
+		{"selected-unknown", func(f *queueStartFacts) { f.Observed.State = heos.PlayStateUnknown }, queueStartWait, "queue_loading", nil},
 		{"selected-hybrid-pair", func(f *queueStartFacts) { f.Observed.Media.QueueID = "1" }, queueStartWait, "queue_loading", nil},
 		{"short-command-keeps-existing-confirmation", func(f *queueStartFacts) {
 			f.Bounded = false
@@ -68,7 +68,7 @@ func TestQueueStartDecisionTable(t *testing.T) {
 		}, queueStartAbort, "queue_media_changed", ErrOwnership},
 		{"unresolved-while-stopped", func(f *queueStartFacts) {
 			unresolvedQueueStart(f)
-			f.Observed.State = "stop"
+			f.Observed.State = heos.PlayStateStop
 		}, queueStartAbort, "queue_media_changed", ErrOwnership},
 		{"unselected-play", func(f *queueStartFacts) { f.Observed.Media.ID = "foreign" }, queueStartAbort, "queue_media_changed", ErrOwnership},
 		{"unresolved-foreign-source", func(f *queueStartFacts) {
@@ -111,8 +111,8 @@ func TestQueueStartDecisionTable(t *testing.T) {
 			unresolvedQueueStart(f)
 			f.Observed.Queue.Items[0].ID = "foreign"
 		}, queueStartAbort, "queue_items_changed", ErrOwnership},
-		{"pause-before-wait", func(f *queueStartFacts) { unresolvedQueueStart(f); f.Observed.State = "pause" }, queueStartAbort, "queue_state_changed", ErrOwnership},
-		{"stop-after-play", func(f *queueStartFacts) { f.Phase = queuePlayObserved; f.Observed.State = "stop" }, queueStartAbort, "queue_state_changed", ErrOwnership},
+		{"pause-before-wait", func(f *queueStartFacts) { unresolvedQueueStart(f); f.Observed.State = heos.PlayStatePause }, queueStartAbort, "queue_state_changed", ErrOwnership},
+		{"stop-after-play", func(f *queueStartFacts) { f.Phase = queuePlayObserved; f.Observed.State = heos.PlayStateStop }, queueStartAbort, "queue_state_changed", ErrOwnership},
 		{"generation-before-wait", func(f *queueStartFacts) { unresolvedQueueStart(f); f.Observed.Token.Generation++ }, queueStartAbort, "queue_controls_changed", ErrOwnership},
 		{"volume-before-wait", func(f *queueStartFacts) {
 			unresolvedQueueStart(f)
@@ -124,7 +124,7 @@ func TestQueueStartDecisionTable(t *testing.T) {
 			muted := true
 			f.Observed.Muted = &muted
 		}, queueStartAbort, "queue_controls_changed", ErrOwnership},
-		{"mode-before-wait", func(f *queueStartFacts) { unresolvedQueueStart(f); f.Observed.Repeat = "on_all" }, queueStartAbort, "queue_controls_changed", ErrOwnership},
+		{"mode-before-wait", func(f *queueStartFacts) { unresolvedQueueStart(f); f.Observed.Repeat = heos.RepeatOnAll }, queueStartAbort, "queue_controls_changed", ErrOwnership},
 		{"shuffle-before-wait", func(f *queueStartFacts) { unresolvedQueueStart(f); f.Observed.Shuffle = false }, queueStartAbort, "queue_controls_changed", ErrOwnership},
 		{"group-before-wait", func(f *queueStartFacts) { unresolvedQueueStart(f); f.Observed.Grouped = true }, queueStartAbort, "queue_controls_changed", ErrOwnership},
 		{"identity-before-wait", func(f *queueStartFacts) { unresolvedQueueStart(f); f.Observed.Player.Serial = "other" }, queueStartAbort, "queue_controls_changed", ErrOwnership},

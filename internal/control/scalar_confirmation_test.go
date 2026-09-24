@@ -16,8 +16,8 @@ type scalarEventDevice struct {
 	onScalarRead func() error
 }
 
-func (d *scalarEventDevice) RefreshScalars(ctx context.Context, kind string) error {
-	d.scalarReads = append(d.scalarReads, kind)
+func (d *scalarEventDevice) RefreshScalars(ctx context.Context, kind heos.MutationKind) error {
+	d.scalarReads = append(d.scalarReads, string(kind))
 	if d.onScalarRead != nil {
 		if err := d.onScalarRead(); err != nil {
 			return err
@@ -41,16 +41,16 @@ func volumeEvent(level, mute string) heos.Event {
 // Denon 5.9 carries volume AND mute; 5.10/5.11 carry independent mode values.
 // A matching notification is the actual observation, even if GET would lag it.
 func TestScalarConfirmationUsesEventsWithoutReadback(t *testing.T) {
-	for _, kind := range []string{"volume", "mute", "mode"} {
+	for _, kind := range []heos.MutationKind{heos.MutationKindVolume, heos.MutationKindMute, heos.MutationKindMode} {
 		for _, timing := range []string{"before-reply", "after-reply", "duplicates"} {
-			t.Run(kind+"/"+timing, func(t *testing.T) {
+			t.Run(string(kind)+"/"+timing, func(t *testing.T) {
 				c, r, d, clock := scalarFixture(t)
-				m := heos.Mutation{Kind: kind, Level: 21, Muted: true, Repeat: "off", Shuffle: true}
+				m := heos.Mutation{Kind: kind, Level: 21, Muted: true, Repeat: heos.RepeatOff, Shuffle: true}
 				e := volumeEvent("21", "off")
-				if kind == "mute" {
+				if kind == heos.MutationKindMute {
 					e = volumeEvent("20", "on")
 				}
-				if kind == "mode" {
+				if kind == heos.MutationKindMode {
 					e = modeEvent("shuffle", "on")
 				}
 				began := clock.Now()
@@ -104,7 +104,7 @@ func TestScalarMissingEventHasOneTargetedFallbackAtDeadline(t *testing.T) {
 				}
 				return nil
 			}
-			err := c.write(c.lanes["room"], r, heos.Mutation{Kind: "volume", Level: 21})
+			err := c.write(c.lanes["room"], r, heos.Mutation{Kind: heos.MutationKindVolume, Level: 21})
 			if outcome == "applied" {
 				if err != nil {
 					t.Fatal(err)
@@ -129,7 +129,7 @@ func TestScalarWaitCancelsOnInterventionWithoutReading(t *testing.T) {
 		t.Run(event.Command+event.Params.Encode(), func(t *testing.T) {
 			c, r, d, clock := scalarFixture(t)
 			clock.events = []modeClockEvent{{clock.Now().Add(100 * time.Millisecond), func() { r.event(event) }}}
-			err := c.write(c.lanes["room"], r, heos.Mutation{Kind: "volume", Level: 21})
+			err := c.write(c.lanes["room"], r, heos.Mutation{Kind: heos.MutationKindVolume, Level: 21})
 			if !errors.Is(err, ErrOwnership) || len(d.reads) != 1 || len(d.scalarReads) != 0 || len(d.writes) != 1 {
 				t.Fatalf("intervention: %v full=%d scalar=%v writes=%d", err, len(d.reads), d.scalarReads, len(d.writes))
 			}

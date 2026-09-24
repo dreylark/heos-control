@@ -201,7 +201,7 @@ func replaySelectedQueue() []heos.Media {
 }
 
 func TestReplayMatchesActualMutationIdentity(t *testing.T) {
-	name, args := replayMutationRequest(heos.Mutation{Kind: "queue", Player: "other-player", Item: heos.Item{Source: "other-server", ContainerID: "other-album"}})
+	name, args := replayMutationRequest(heos.Mutation{Kind: heos.MutationKindQueue, Player: "other-player", Item: heos.Item{Source: "other-server", ContainerID: "other-album"}})
 	if name != "browse/add_to_queue" || args["pid"] != "other-player" || args["sid"] != "other-server" || args["cid"] != "other-album" {
 		t.Fatal("replay concealed the actual mutation identity", name, args)
 	}
@@ -209,7 +209,7 @@ func TestReplayMatchesActualMutationIdentity(t *testing.T) {
 
 func applyReplayPatch(s *heos.Snapshot, p replayPatch) {
 	if p.State != nil {
-		s.State = *p.State
+		s.State = heos.PlayState(*p.State)
 	}
 	if p.Volume != nil {
 		v := *p.Volume
@@ -220,7 +220,7 @@ func applyReplayPatch(s *heos.Snapshot, p replayPatch) {
 		s.Muted = &v
 	}
 	if p.Repeat != nil {
-		s.Repeat = *p.Repeat
+		s.Repeat = heos.Repeat(*p.Repeat)
 	}
 	if p.Shuffle != nil {
 		s.Shuffle = *p.Shuffle
@@ -245,26 +245,26 @@ func applyReplayPatch(s *heos.Snapshot, p replayPatch) {
 func replayMutationRequest(m heos.Mutation) (string, map[string]string) {
 	args := map[string]string{"pid": string(m.Player)}
 	switch m.Kind {
-	case "volume":
+	case heos.MutationKindVolume:
 		args["level"] = fmt.Sprint(m.Level)
 		return "player/set_volume", args
-	case "mute":
+	case heos.MutationKindMute:
 		args["state"] = "off"
 		if m.Muted {
 			args["state"] = "on"
 		}
 		return "player/set_mute", args
-	case "mode":
-		args["repeat"] = m.Repeat
+	case heos.MutationKindMode:
+		args["repeat"] = string(m.Repeat)
 		args["shuffle"] = "off"
 		if m.Shuffle {
 			args["shuffle"] = "on"
 		}
 		return "player/set_play_mode", args
-	case "transport":
-		args["state"] = m.State
+	case heos.MutationKindTransport:
+		args["state"] = string(m.State)
 		return "player/set_play_state", args
-	case "queue":
+	case heos.MutationKindQueue:
 		args["sid"], args["cid"], args["aid"] = string(m.Item.Source), string(m.Item.ContainerID), "4"
 		return "browse/add_to_queue", args
 	default:
@@ -289,11 +289,11 @@ func decodeReplayFixture(data []byte) (replayFixture, error) {
 	if f.Version != 1 || f.Name == "" || f.Family == "" || f.Model == "" || f.Source == "" || len(f.Notes) == 0 || !slices.Contains([]string{"captured", "reconstructed", "synthetic"}, f.Provenance) {
 		return f, fmt.Errorf("missing or unsupported fixture metadata")
 	}
-	if !slices.Contains([]string{"stop", "pause"}, f.Initial.State) || f.Initial.Volume < 0 || f.Initial.Volume > 40 || f.Initial.Repeat != "off" {
+	if !slices.Contains([]string{"stop", "pause"}, f.Initial.State) || f.Initial.Volume < 0 || f.Initial.Volume > 40 || f.Initial.Repeat != string(heos.RepeatOff) {
 		return f, fmt.Errorf("invalid initial state")
 	}
 	ceiling := 40
-	if err := f.Automation.validate(Command{Kind: "playback", Level: 10, Repeat: "off"}, &ceiling); err != nil {
+	if err := f.Automation.validate(Command{Kind: CommandKindPlayback, Level: 10, Repeat: heos.RepeatOff}, &ceiling); err != nil {
 		return f, err
 	}
 	if f.Expect.State == "" || f.Expect.Reason == "" || f.Expect.QueueWrites < 0 || f.Expect.QueueWrites > 1 || f.Expect.MaxFullReads < 0 || f.Expect.MaxScalarReads < 0 || f.Expect.MaxWireGets < 0 || f.Expect.MaxWireWrites < 1 {

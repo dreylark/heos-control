@@ -39,21 +39,36 @@ type OperationJournal interface {
 	Transition(context.Context, string, int64, journal.Update) (journal.Operation, error)
 }
 
+// CommandKind is a coordinator command. It is not a HEOS write: playback, stop
+// and cancel have no MutationKind. Absent is the zero value and is not a command.
+type CommandKind string
+
+const (
+	CommandKindAbsent    CommandKind = ""
+	CommandKindVolume    CommandKind = "volume"
+	CommandKindMute      CommandKind = "mute"
+	CommandKindTransport CommandKind = "transport"
+	CommandKindSkip      CommandKind = "skip"
+	CommandKindPlayback  CommandKind = "playback"
+	CommandKindStop      CommandKind = "stop"
+	CommandKindCancel    CommandKind = "cancel"
+)
+
 // Command is validated policy input; wire identifiers are resolved internally.
 type Command struct {
-	Kind        string      `json:"kind"`
-	Level       int         `json:"level"`
-	Muted       bool        `json:"muted"`
-	State       string      `json:"state"`
-	Direction   string      `json:"direction,omitempty"`
-	Takeover    bool        `json:"takeover"`
-	ItemRef     string      `json:"item_ref"`
-	Shuffle     bool        `json:"shuffle"`
-	Repeat      string      `json:"repeat"`
-	Mode        string      `json:"mode"`
-	FadeSeconds int         `json:"fade_seconds"`
-	Target      string      `json:"target"`
-	Automation  *Automation `json:"automation,omitempty"`
+	Kind        CommandKind    `json:"kind"`
+	Level       int            `json:"level"`
+	Muted       bool           `json:"muted"`
+	State       heos.PlayState `json:"state"`
+	Direction   string         `json:"direction,omitempty"`
+	Takeover    bool           `json:"takeover"`
+	ItemRef     string         `json:"item_ref"`
+	Shuffle     bool           `json:"shuffle"`
+	Repeat      heos.Repeat    `json:"repeat"`
+	Mode        string         `json:"mode"`
+	FadeSeconds int            `json:"fade_seconds"`
+	Target      string         `json:"target"`
+	Automation  *Automation    `json:"automation,omitempty"`
 }
 type controlClock interface {
 	Now() time.Time
@@ -174,8 +189,8 @@ func safety(l *lane, s heos.Snapshot) error {
 	return deviceSafety(l.device.Config, s)
 }
 
-func mutationSafety(l *lane, s heos.Snapshot, kind string) error {
-	if kind != "skip" || s.State != "unknown" {
+func mutationSafety(l *lane, s heos.Snapshot, skip bool) error {
+	if !skip || s.State != heos.PlayStateUnknown {
 		return safety(l, s)
 	}
 	// A verified unknown playback state is a skip-domain rejection, while
@@ -190,7 +205,7 @@ func deviceSafety(p config.Player, s heos.Snapshot) error {
 	if err := deviceObservationSafety(p, s); err != nil {
 		return err
 	}
-	if s.State != "stop" && s.State != "play" && s.State != "pause" {
+	if !s.State.Writable() {
 		return ErrUnavailable
 	}
 	return nil
@@ -227,7 +242,7 @@ func (c *Coordinator) Submit(ctx context.Context, request journal.Request, cmd C
 	if l == nil {
 		return journal.Operation{}, ErrUnavailable
 	}
-	priority := cmd.Kind == "stop" || cmd.Kind == "cancel"
+	priority := cmd.Kind == CommandKindStop || cmd.Kind == CommandKindCancel
 	release := func() {}
 	transferred := false
 	defer func() {
@@ -252,7 +267,7 @@ func (c *Coordinator) Submit(ctx context.Context, request journal.Request, cmd C
 		}
 		l.mu.Unlock()
 		wireRelease := func() {}
-		if cmd.Kind == "stop" {
+		if cmd.Kind == CommandKindStop {
 			wireRelease = l.writer.BeginPriority()
 			ctx = heos.Priority(ctx)
 		}
@@ -291,7 +306,7 @@ func (c *Coordinator) Submit(ctx context.Context, request journal.Request, cmd C
 		return journal.Operation{}, e
 	}
 	if cmd.FadeSeconds < 0 || cmd.FadeSeconds > 60 || cmd.Level < 0 || cmd.Level > 100 ||
-		(cmd.Kind == "skip" && cmd.Direction != "next" && cmd.Direction != "previous") {
+		(cmd.Kind == CommandKindSkip && cmd.Direction != "next" && cmd.Direction != "previous") {
 		return journal.Operation{}, heos.ErrBounds
 	}
 	// Freeze caller-owned optional settings before admitting asynchronous work.
@@ -316,19 +331,19 @@ func (c *Coordinator) Submit(ctx context.Context, request journal.Request, cmd C
 	}
 	s := l.device.Observer.Snapshot()
 	if !priority {
-		if e := mutationSafety(l, s, cmd.Kind); e != nil {
+		if e := mutationSafety(l, s, cmd.Kind == CommandKindSkip); e != nil {
 			return journal.Operation{}, e
 		}
 	}
-	if cmd.Automation != nil && !cmd.Takeover && s.State == "play" {
+	if cmd.Automation != nil && !cmd.Takeover && s.State == heos.PlayStatePlay {
 		return journal.Operation{}, journal.ErrBusy
 	}
-	if (cmd.Kind == "volume" || cmd.Kind == "playback") && (l.device.Config.VolumeCeiling == nil || cmd.Level > *l.device.Config.VolumeCeiling) {
+	if (cmd.Kind == CommandKindVolume || cmd.Kind == CommandKindPlayback) && (l.device.Config.VolumeCeiling == nil || cmd.Level > *l.device.Config.VolumeCeiling) {
 		return journal.Operation{}, heos.ErrBounds
 	}
 	var item heos.Item
 	members := map[heos.ID]bool{}
-	if cmd.Kind == "playback" {
+	if cmd.Kind == CommandKindPlayback {
 		var e error
 		item, e = c.reads.resolveItem(ctx, l.device, cmd.ItemRef)
 		if e != nil {
@@ -346,7 +361,7 @@ func (c *Coordinator) Submit(ctx context.Context, request journal.Request, cmd C
 	if e == nil && !priority && !cmd.Takeover {
 		return journal.Operation{}, journal.ErrBusy
 	}
-	if cmd.Kind == "cancel" && (old.ID != cmd.Target || old.Phase == "cancelling") {
+	if cmd.Kind == CommandKindCancel && (old.ID != cmd.Target || old.Phase == "cancelling") {
 		return journal.Operation{}, ErrOwnership
 	}
 	l.mu.Lock()
@@ -376,7 +391,7 @@ func (c *Coordinator) Submit(ctx context.Context, request journal.Request, cmd C
 			old = journal.Operation{}
 		}
 	}
-	if cmd.Kind == "cancel" {
+	if cmd.Kind == CommandKindCancel {
 		if previous == nil {
 			return journal.Operation{}, ErrOwnership
 		}
@@ -389,7 +404,7 @@ func (c *Coordinator) Submit(ctx context.Context, request journal.Request, cmd C
 			return journal.Operation{}, ErrOwnership
 		}
 	}
-	if cmd.Kind != "cancel" || cmd.Mode != "release" {
+	if cmd.Kind != CommandKindCancel || cmd.Mode != "release" {
 		if priority || cmd.Takeover { // Reads only; reconnect can briefly be in cooldown after fencing.
 			deadline := time.Now().Add(3 * time.Second)
 			for {
@@ -406,10 +421,10 @@ func (c *Coordinator) Submit(ctx context.Context, request journal.Request, cmd C
 			}
 		}
 		fresh := l.device.Observer.Snapshot()
-		if e = mutationSafety(l, fresh, cmd.Kind); e != nil {
+		if e = mutationSafety(l, fresh, cmd.Kind == CommandKindSkip); e != nil {
 			return journal.Operation{}, e
 		}
-		if cmd.Kind == "cancel" {
+		if cmd.Kind == CommandKindCancel {
 			if previous.bounded {
 				fresh, e = completeQueue(ctx, l, fresh)
 				if e != nil {
@@ -424,10 +439,10 @@ func (c *Coordinator) Submit(ctx context.Context, request journal.Request, cmd C
 			}
 		}
 		s = fresh
-		if cmd.Automation != nil && !cmd.Takeover && s.State == "play" {
+		if cmd.Automation != nil && !cmd.Takeover && s.State == heos.PlayStatePlay {
 			return journal.Operation{}, journal.ErrBusy
 		}
-		if ((cmd.Kind == "transport" && cmd.State == "play") || (cmd.Kind == "mute" && !cmd.Muted)) && *s.Volume > *l.device.Config.VolumeCeiling {
+		if ((cmd.Kind == CommandKindTransport && cmd.State == heos.PlayStatePlay) || (cmd.Kind == CommandKindMute && !cmd.Muted)) && *s.Volume > *l.device.Config.VolumeCeiling {
 			return journal.Operation{}, heos.ErrBounds
 		}
 	}
@@ -437,7 +452,7 @@ func (c *Coordinator) Submit(ctx context.Context, request journal.Request, cmd C
 			return journal.Operation{}, ErrPrecondition
 		}
 	}
-	if cmd.Kind == "skip" {
+	if cmd.Kind == CommandKindSkip {
 		readctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		s, e = completeQueue(readctx, l, s)
 		cancel()
@@ -473,7 +488,7 @@ func (c *Coordinator) Submit(ctx context.Context, request journal.Request, cmd C
 	}
 	configuration, _ := json.Marshal(l.device.Config)
 	now := c.clock.Now()
-	proposal := journal.Proposal{Kind: cmd.Kind, DeviceKey: l.device.Config.Serial, ConfigRevision: fmt.Sprintf("direct:%x", sha256.Sum256(configuration)), EffectiveArguments: args, NotBefore: now, NotAfter: now.Add(time.Minute), ReplaceID: old.ID, ReplaceRevision: old.Revision}
+	proposal := journal.Proposal{Kind: string(cmd.Kind), DeviceKey: l.device.Config.Serial, ConfigRevision: fmt.Sprintf("direct:%x", sha256.Sum256(configuration)), EffectiveArguments: args, NotBefore: now, NotAfter: now.Add(time.Minute), ReplaceID: old.ID, ReplaceRevision: old.Revision}
 	if previous != nil {
 		previous.mu.Lock()
 		proposal.ReplaceUncertain = previous.uncertain || previous.unconfirmed
@@ -492,7 +507,7 @@ func (c *Coordinator) Submit(ctx context.Context, request journal.Request, cmd C
 		return a.Operation, nil
 	}
 	replaced = true
-	if old.ID != "" && previous != nil && old.ID == previous.id && cmd.Kind != "cancel" {
+	if old.ID != "" && previous != nil && old.ID == previous.id && cmd.Kind != CommandKindCancel {
 		// Admit commits this terminal handoff atomically with the new operation.
 		state := journal.Released
 		if proposal.ReplaceUncertain {
@@ -501,16 +516,16 @@ func (c *Coordinator) Submit(ctx context.Context, request journal.Request, cmd C
 		previous.metrics.finishAs(state, "superseded")
 	}
 	runctx, cancel := context.WithCancelCause(c.ctx)
-	if cmd.Kind == "stop" {
+	if cmd.Kind == CommandKindStop {
 		runctx = heos.Priority(runctx)
 	}
 	run := &execution{ctx: runctx, cancel: cancel, done: make(chan struct{}), op: a.Operation, phase: a.Operation.Phase, id: a.Operation.ID, expected: s, members: members, events: map[string][]map[string]string{}, now: c.clock.Now, wake: make(chan struct{}, 1)}
 	run.metrics = &operationMetrics{player: l.device.Metrics, kind: a.Operation.Kind}
-	if cmd.Kind == "cancel" && previous != nil {
+	if cmd.Kind == CommandKindCancel && previous != nil {
 		run.targetMetrics = previous.metrics
 	}
 	run.bounded = cmd.Automation != nil
-	if cmd.Kind == "cancel" && cmd.Mode == "stop_owned" && previous != nil {
+	if cmd.Kind == CommandKindCancel && cmd.Mode == "stop_owned" && previous != nil {
 		run.bounded = previous.bounded
 		previous.mu.Lock()
 		run.queueOwned = previous.queueOwned

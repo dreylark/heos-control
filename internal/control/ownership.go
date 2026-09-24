@@ -21,8 +21,8 @@ func (r *execution) ownedChanges(a, b heos.Snapshot) []string {
 		return []string{"connection_generation"}
 	}
 	if r.queueOwned && a.State == b.State &&
-		((b.State == "play" && queuedMedia(a.Queue, b.Media)) ||
-			(b.State == "stop" && (emptyMedia(b.Media) || queuedMedia(a.Queue, b.Media)))) {
+		((b.State == heos.PlayStatePlay && queuedMedia(a.Queue, b.Media)) ||
+			(b.State == heos.PlayStateStop && (emptyMedia(b.Media) || queuedMedia(a.Queue, b.Media)))) {
 		a.Media = b.Media
 	}
 	return stateChanges(a, b)

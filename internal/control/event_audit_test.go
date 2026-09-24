@@ -21,7 +21,7 @@ func TestNewBackgroundAuditCannotBeHiddenByScalarProjection(t *testing.T) {
 			l := c.lanes["room"]
 			l.device.Observer, l.device.Client, l.writer = d, d, d
 			total := 1
-			base.s.State = "play"
+			base.s.State = heos.PlayStatePlay
 			base.s.Media = &heos.Media{Source: "1024", ID: "owned", QueueID: "1"}
 			base.s.Queue = heos.QueuePage{Total: &total, Items: []heos.Media{*base.s.Media}}
 			r.expected = base.s
@@ -40,7 +40,7 @@ func TestNewBackgroundAuditCannotBeHiddenByScalarProjection(t *testing.T) {
 			if field == "queue" {
 				err = c.checkOwnership(l, r)
 			} else {
-				err = c.write(l, r, heos.Mutation{Kind: "volume", Level: 21})
+				err = c.write(l, r, heos.Mutation{Kind: heos.MutationKindVolume, Level: 21})
 			}
 			if !errors.Is(err, ErrOwnership) || len(base.writes) != 0 {
 				t.Fatalf("new audit was ignored: error=%v setters=%v", err, base.writes)

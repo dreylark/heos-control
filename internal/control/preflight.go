@@ -21,7 +21,7 @@ func (s *Reads) Preflight(ctx context.Context, key string, cmd Command) (Preflig
 	if err != nil {
 		return Preflight{}, err
 	}
-	if cmd.Kind != "playback" || cmd.ItemRef == "" || cmd.Level < 0 || cmd.Level > 100 || (cmd.Repeat != "off" && cmd.Repeat != "on_all" && cmd.Repeat != "on_one") {
+	if cmd.Kind != CommandKindPlayback || cmd.ItemRef == "" || cmd.Level < 0 || cmd.Level > 100 || !cmd.Repeat.Known() {
 		return Preflight{}, heos.ErrBounds
 	}
 	// Malformed automation is an input error; the configured ceiling is a separate
@@ -57,7 +57,7 @@ func (s *Reads) Preflight(ctx context.Context, key string, cmd Command) (Preflig
 	if ceiling := d.Config.VolumeCeiling; ceiling != nil && (cmd.Level > *ceiling || cmd.Automation != nil && cmd.Automation.TargetLevel > *ceiling) {
 		result.Warnings = append(result.Warnings, "volume_policy_exceeded")
 	}
-	if cmd.Automation != nil && !cmd.Takeover && before.State == "play" {
+	if cmd.Automation != nil && !cmd.Takeover && before.State == heos.PlayStatePlay {
 		result.Warnings = append(result.Warnings, "player_busy")
 	}
 	// Skip catalog I/O when the device cannot currently accept this request.

@@ -363,13 +363,13 @@ func (d *tlsReplayDevice) baseline(name string, params url.Values) (any, []repla
 	case "group/get_groups":
 		return []any{}, nil, nil
 	case "player/get_play_state":
-		params.Set("state", s.State)
+		params.Set("state", string(s.State))
 	case "player/get_volume":
 		params.Set("level", strconv.Itoa(*s.Volume))
 	case "player/get_mute":
 		params.Set("state", replayOnOff(*s.Muted))
 	case "player/get_play_mode":
-		params.Set("repeat", s.Repeat)
+		params.Set("repeat", string(s.Repeat))
 		params.Set("shuffle", replayOnOff(s.Shuffle))
 	case "player/get_now_playing_media":
 		return s.Media, nil, nil
@@ -404,18 +404,18 @@ func (d *tlsReplayDevice) baseline(name string, params url.Values) (any, []repla
 		s.Muted = &muted
 		events = append(events, volume())
 	case "player/set_play_mode":
-		s.Repeat, s.Shuffle = params.Get("repeat"), params.Get("shuffle") == "on"
-		events = append(events, event("repeat_mode_changed", map[string]string{"repeat": s.Repeat}), event("shuffle_mode_changed", map[string]string{"shuffle": replayOnOff(s.Shuffle)}))
+		s.Repeat, s.Shuffle = heos.Repeat(params.Get("repeat")), params.Get("shuffle") == "on"
+		events = append(events, event("repeat_mode_changed", map[string]string{"repeat": string(s.Repeat)}), event("shuffle_mode_changed", map[string]string{"shuffle": replayOnOff(s.Shuffle)}))
 	case "player/set_play_state":
-		s.State = params.Get("state")
-		events = append(events, event("player_state_changed", map[string]string{"state": s.State}))
+		s.State = heos.PlayState(params.Get("state"))
+		events = append(events, event("player_state_changed", map[string]string{"state": string(s.State)}))
 	case "browse/add_to_queue":
 		if params.Get("sid") != "900" || params.Get("cid") != "green" || params.Get("aid") != "4" {
 			return nil, nil, fmt.Errorf("unexpected queue request %s", params.Encode())
 		}
 		applyReplayPatch(s, replayPatch{Queue: "selected"})
 		media := s.Queue.Items[0]
-		s.Media, s.State = &media, "play"
+		s.Media, s.State = &media, heos.PlayStatePlay
 		events = append(events, event("player_queue_changed", map[string]string{}), event("player_now_playing_changed", map[string]string{}), event("player_state_changed", map[string]string{"state": "play"}))
 	default:
 		return nil, nil, fmt.Errorf("unsupported replay request %s", name)
@@ -438,7 +438,7 @@ func runTLSReplay(t *testing.T, f replayFixture) (tlsReplayResult, error) {
 	defer watchdog.Stop()
 	defer cancel(nil)
 	clock := &tlsReplayClock{now: time.Now(), delivery: newWireEventDelivery()}
-	device := &tlsReplayDevice{fixture: f, clock: clock, ctx: ctx, cancel: cancel, occurrence: map[string]int{}, state: heos.Snapshot{State: f.Initial.State, Volume: &f.Initial.Volume, Muted: &f.Initial.Muted, Repeat: f.Initial.Repeat, Shuffle: f.Initial.Shuffle}}
+	device := &tlsReplayDevice{fixture: f, clock: clock, ctx: ctx, cancel: cancel, occurrence: map[string]int{}, state: heos.Snapshot{State: heos.PlayState(f.Initial.State), Volume: &f.Initial.Volume, Muted: &f.Initial.Muted, Repeat: heos.Repeat(f.Initial.Repeat), Shuffle: f.Initial.Shuffle}}
 	applyReplayPatch(&device.state, replayPatch{Queue: "old", Media: &replayMedia{MID: "previous-track", QID: "1", Source: "1024"}})
 	seed := httptest.NewTLSServer(http.NotFoundHandler())
 	certificate := seed.TLS.Certificates[0]
@@ -547,7 +547,7 @@ func runTLSReplay(t *testing.T, f replayFixture) (tlsReplayResult, error) {
 		return result, err
 	}
 	request := journal.Request{Principal: "operator", Player: "room", Key: "replay", Method: "POST", Endpoint: "/v1/players/room/playback", IfMatch: fmt.Sprintf("%q", player.Revision), Body: json.RawMessage(`{"initial_volume":{"unit":"heos","level":10}}`)}
-	admission, err := coordinator.Submit(ctx, request, Command{Kind: "playback", Level: 10, ItemRef: page.Items[0].Ref, Shuffle: true, Repeat: "off", Automation: &f.Automation})
+	admission, err := coordinator.Submit(ctx, request, Command{Kind: CommandKindPlayback, Level: 10, ItemRef: page.Items[0].Ref, Shuffle: true, Repeat: heos.RepeatOff, Automation: &f.Automation})
 	if err != nil {
 		return result, err
 	}

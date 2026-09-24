@@ -20,7 +20,7 @@ type Automation struct {
 }
 
 func (a Automation) validate(cmd Command, ceiling *int) error {
-	if cmd.Kind != "playback" || cmd.Repeat != "off" || ceiling == nil ||
+	if cmd.Kind != CommandKindPlayback || cmd.Repeat != heos.RepeatOff || ceiling == nil ||
 		a.TargetLevel < cmd.Level || a.TargetLevel > *ceiling || a.TargetLevel > 100 ||
 		a.DurationSeconds < 1 || a.DurationSeconds > 7200 ||
 		a.FadeSeconds < 0 || a.FadeSeconds > 60 || a.FadeSeconds >= a.DurationSeconds ||
@@ -148,7 +148,7 @@ func (c *Coordinator) automate(l *lane, r *execution, a Automation) error {
 			phase = nextPhase
 		}
 		if level != last {
-			if err := c.write(l, r, heos.Mutation{Kind: "volume", Level: level}); err != nil {
+			if err := c.write(l, r, heos.Mutation{Kind: heos.MutationKindVolume, Level: level}); err != nil {
 				if errors.Is(err, errPlaybackTimelineChanged) {
 					continue
 				}
@@ -160,7 +160,7 @@ func (c *Coordinator) automate(l *lane, r *execution, a Automation) error {
 			}
 		}
 		if elapsed >= duration {
-			return c.write(l, r, heos.Mutation{Kind: "transport", State: "stop"})
+			return c.write(l, r, heos.Mutation{Kind: heos.MutationKindTransport, State: heos.PlayStateStop})
 		}
 		if err := c.clock.Wait(r.ctx, min(250*time.Millisecond, duration-elapsed), r.wake); err != nil {
 			return err
