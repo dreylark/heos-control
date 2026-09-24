@@ -105,9 +105,14 @@ match, or assume a displayed album has complete playable membership.
 
 ## Prepare and submit playback
 
-The client selects a playable media item or container and retains its current
-`item_ref`. A catalog item with `kind: media` and `playable: true` can start a
-single song/track through the same playback endpoint.
+The client selects a media item or container and retains its current `item_ref`.
+A catalog item with `kind: media` and `playable: true` can start a single
+song/track. For containers, the service accepts `playable: false` after bounded
+traversal validates a nonempty set of playable song/track members. This flag
+reflects HEOS browse metadata. Both preflight and playback reject any unsuitable
+media member before device writes. Source entries are for browsing only.
+Queue replacement uses `browse/add_to_queue` with the container id
+(HEOS CLI Protocol Specification 1.17, 4.4.11, aid 4).
 The same body is accepted by preflight and playback. This is an illustrative
 request; choose levels within the player's verified ceiling:
 

@@ -324,7 +324,14 @@ paths:
       operationId: getItems
       tags: [Sources]
       summary: Browse source items
-      description: Requires read scope and access to the source player. Pass a browsable item_ref as parent_ref to enter a container, and next_cursor as cursor to continue a listing, with bounded traversal. Use an available playable item_ref for preflight and playback.
+      description: |
+        Requires read scope and access to the source player. Pass a browsable
+        item_ref as parent_ref to enter a container, and next_cursor as cursor to
+        continue a listing, with bounded traversal. For preflight and playback,
+        use a song/track media item_ref with playable=true, or a container
+        item_ref even when playable=false. Containers must resolve to a nonempty,
+        bounded set of playable song/track members before preflight reports ready
+        or playback is accepted. Source entries are for browsing only.
       parameters:
       - name: source
         in: path
@@ -1366,6 +1373,7 @@ components:
                 type: boolean
               playable:
                 type: boolean
+                description: HEOS browse playable flag. Required to be true for media playback. A container item_ref may be used for preflight and playback even when false, subject to validation of its playable song/track members. This flag alone does not establish playback readiness.
         total:
           type:
           - integer

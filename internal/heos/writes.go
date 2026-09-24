@@ -72,16 +72,18 @@ func (m Mutation) command() (string, url.Values, error) {
 		return "player/set_play_mode", a, nil
 	case MutationKindQueue:
 		i := m.Item
-		if i.Playable != "yes" || i.Source == "" || i.ContainerID == "" {
+		// Denon 4.4.11 queues a container by sid+cid+aid. Browse may report
+		// playable=no for a folder the controller app still replaces the queue with.
+		if i.Source == "" || i.ContainerID == "" {
+			return "", nil, ErrBounds
+		}
+		if i.Container != "yes" && (i.Playable != "yes" || i.MediaID == "" || (i.Type != "song" && i.Type != "track")) {
 			return "", nil, ErrBounds
 		}
 		a.Set("sid", string(i.Source))
 		a.Set("cid", string(i.ContainerID))
 		a.Set("aid", "4")
 		if i.Container != "yes" {
-			if i.MediaID == "" || (i.Type != "song" && i.Type != "track") {
-				return "", nil, ErrBounds
-			}
 			a.Set("mid", string(i.MediaID))
 		}
 		return "browse/add_to_queue", a, nil

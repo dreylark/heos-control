@@ -24,7 +24,13 @@ func (s *Reads) resolveItem(ctx context.Context, d Device, ref string) (heos.Ite
 		}
 		item, e := resolver.Resolve(sid, ref)
 		if e == nil {
-			if item.Playable != "yes" || item.ContainerID == "" || (item.Container != "yes" && (item.MediaID == "" || (item.Type != "song" && item.Type != "track"))) {
+			if item.ContainerID == "" {
+				return item, heos.ErrBounds
+			}
+			if item.Container == "yes" {
+				return item, nil
+			}
+			if item.Playable != "yes" || item.MediaID == "" || (item.Type != "song" && item.Type != "track") {
 				return item, heos.ErrBounds
 			}
 			return item, nil
