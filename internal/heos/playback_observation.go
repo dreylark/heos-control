@@ -67,6 +67,7 @@ func (o *Observer) RefreshPlayback(ctx context.Context) error {
 	}
 	s.State, s.Media, s.EventUpdated = state, &media, true
 	s.MediaStale = state != "play" && state != "pause"
+	s.Playhead = o.playheadForMedia(s.Media, state)
 	o.last, o.mediaPending = s, false
 	o.signalChanged()
 	return nil

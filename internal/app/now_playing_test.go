@@ -32,12 +32,17 @@ import (
 type mediaPlayerResponse struct {
 	control.Player
 	NowPlaying *struct {
-		Song    string `json:"song"`
-		Album   string `json:"album"`
-		Artist  string `json:"artist"`
-		QueueID string `json:"queue_id"`
-		MediaID string `json:"media_id"`
-		Stale   bool   `json:"stale"`
+		Song     string `json:"song"`
+		Album    string `json:"album"`
+		Artist   string `json:"artist"`
+		QueueID  string `json:"queue_id"`
+		MediaID  string `json:"media_id"`
+		Stale    bool   `json:"stale"`
+		Progress *struct {
+			PositionMS *int64    `json:"position_ms"`
+			DurationMS *int64    `json:"duration_ms"`
+			SampledAt  time.Time `json:"sampled_at"`
+		} `json:"progress"`
 	} `json:"now_playing"`
 }
 

@@ -145,6 +145,21 @@ type Snapshot struct {
 	// EventUpdated distinguishes a continuously maintained projection or targeted
 	// scalar/metadata read from a complete identity, group and queue audit.
 	EventUpdated bool
+	// Playhead is the last accepted §5.6 sample bound to one media identity.
+	// It is display data: progress events do not renew ObservedAt or the control token.
+	Playhead *Playhead
+}
+
+// Playhead is a last-sampled now-playing position. DurationMS is zero when the
+// device reports an unknown duration. Source, Media and Queue bind the sample
+// to the media identity that was current when it was accepted.
+type Playhead struct {
+	PositionMS int64
+	DurationMS int64
+	At         time.Time
+	Source     ID
+	Media      ID
+	Queue      ID
 }
 
 // Observer starts with a complete same-generation, event-stable read, then applies
@@ -161,9 +176,11 @@ type Observer struct {
 	invalid      bool
 	mediaPending bool
 	writePending observedFields
-	wake         chan struct{}
-	changed      chan struct{}
-	newTimer     func(time.Duration) observationTimer
+	// Samples received before a new baseline/media identity cannot be rebound to it.
+	progressAfter uint64
+	wake          chan struct{}
+	changed       chan struct{}
+	newTimer      func(time.Duration) observationTimer
 }
 
 func NewObserver(client *Client, identity Identity, ttl time.Duration) (*Observer, error) {
@@ -186,6 +203,7 @@ func cloneSnapshot(s Snapshot) Snapshot {
 	s.Volume = clonePtr(s.Volume)
 	s.Muted = clonePtr(s.Muted)
 	s.Media = clonePtr(s.Media)
+	s.Playhead = clonePtr(s.Playhead)
 	s.Groups = append([]Group(nil), s.Groups...)
 	for i := range s.Groups {
 		s.Groups[i].Players = append([]GroupMember(nil), s.Groups[i].Players...)
@@ -368,6 +386,7 @@ func (o *Observer) refresh(ctx context.Context, force bool) error {
 	if s.Queue.Token != s.Token || view.Token != s.Token || !view.Connected {
 		return ErrStale
 	}
+	o.progressAfter = o.client.progressSequence.Load()
 	o.last = s
 	o.invalid = false
 	o.mediaPending = false

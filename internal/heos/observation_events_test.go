@@ -110,6 +110,158 @@ func TestProgressCannotHideGapsOrMalformedTelemetry(t *testing.T) {
 	}
 }
 
+func TestPlayheadSampleIsDisplayOnly(t *testing.T) {
+	server := newFakeHEOS(t, func(c net.Conn, u *url.URL, _ int64) { observationReply(c, u, "serial-A") })
+	c := fakeClient(t, server)
+	o, _ := NewObserver(c, Identity{Key: "room", Serial: "serial-A"}, ObservationCacheTTL)
+	now := time.Unix(1_700_000_000, 0).UTC()
+	o.now = func() time.Time { return now }
+	if err := o.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	before, commands := o.Snapshot(), server.commands.Load()
+	deliverObservationEvent(c, o, "event/player_now_playing_progress", "pid=9007199254740993&cur_pos=0&duration=200")
+	s := o.Snapshot()
+	if s.Playhead == nil || s.Playhead.PositionMS != 0 || s.Playhead.DurationMS != 200 || !s.Playhead.At.Equal(now) ||
+		s.Playhead.Source != before.Media.Source || s.Playhead.Media != before.Media.ID || s.Playhead.Queue != before.Media.QueueID {
+		t.Fatalf("missing zero position sample: %+v", s.Playhead)
+	}
+	if s.Stale || s.EventUpdated || s.ObservedAt != before.ObservedAt || s.Token != before.Token || len(o.wake) != 0 || server.commands.Load() != commands {
+		t.Fatalf("progress changed control observation: stale=%t updated=%t reads=%d wake=%d token=%+v", s.Stale, s.EventUpdated, server.commands.Load()-commands, len(o.wake), s.Token)
+	}
+	s.Playhead.PositionMS = 99
+	if o.Snapshot().Playhead.PositionMS != 0 {
+		t.Fatal("playhead aliases caller memory")
+	}
+	now = now.Add(time.Second)
+	deliverObservationEvent(c, o, "event/player_now_playing_progress", "pid=9007199254740993&cur_pos=10&duration=0")
+	if s = o.Snapshot(); s.Playhead == nil || s.Playhead.PositionMS != 10 || s.Playhead.DurationMS != 0 || !s.Playhead.At.Equal(now) || s.ObservedAt != before.ObservedAt {
+		t.Fatalf("unknown duration: %+v observed=%s", s.Playhead, s.ObservedAt)
+	}
+	deliverObservationEvent(c, o, "event/player_now_playing_progress", "pid=2&cur_pos=80&duration=90")
+	deliverObservationEvent(c, o, "event/player_now_playing_progress", "pid=9007199254740993&cur_pos=9223372036854775808&duration=0")
+	if s = o.Snapshot(); s.Stale || len(o.wake) != 0 || s.Playhead.PositionMS != 10 || server.commands.Load() != commands {
+		t.Fatalf("foreign or oversized progress changed observation: %+v", s.Playhead)
+	}
+	for _, state := range []string{"play", "pause"} {
+		deliverObservationEvent(c, o, "event/player_state_changed", "pid=9007199254740993&state="+state)
+		if s = o.Snapshot(); s.Playhead == nil || s.Playhead.PositionMS != 10 || s.State != state || s.ObservedAt != before.ObservedAt {
+			t.Fatalf("%s cleared the sample: %+v", state, s.Playhead)
+		}
+	}
+	deliverObservationEvent(c, o, "event/player_state_changed", "pid=9007199254740993&state=stop")
+	if s = o.Snapshot(); s.Playhead != nil || s.State != "stop" || !s.MediaStale || s.ObservedAt != before.ObservedAt || len(o.wake) != 0 {
+		t.Fatalf("stop kept a playhead or scheduled a read: %+v wake=%d", s.Playhead, len(o.wake))
+	}
+}
+
+func TestPlayheadFollowsMediaIdentity(t *testing.T) {
+	var mid, qid atomic.Value
+	mid.Store("track-1")
+	qid.Store("1")
+	server := newFakeHEOS(t, func(c net.Conn, u *url.URL, _ int64) {
+		if commandName(u) == "player/get_now_playing_media" {
+			sendReply(c, u, nil, map[string]any{"sid": 1024, "mid": mid.Load(), "qid": qid.Load(), "album": "Green"})
+			return
+		}
+		observationReply(c, u, "serial-A")
+	})
+	c := fakeClient(t, server)
+	o, _ := NewObserver(c, Identity{Key: "room", Serial: "serial-A"}, ObservationCacheTTL)
+	if err := o.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	deliverObservationEvent(c, o, "event/player_now_playing_progress", "pid=9007199254740993&cur_pos=25&duration=100")
+	deliverObservationEvent(c, o, "event/player_now_playing_changed", "pid=9007199254740993")
+	if s := o.Snapshot(); !s.MediaStale || s.Playhead == nil || s.Playhead.PositionMS != 25 {
+		t.Fatalf("hint dropped the hidden sample: %+v", s.Playhead)
+	}
+	deliverObservationEvent(c, o, "event/player_now_playing_progress", "pid=9007199254740993&cur_pos=80&duration=100")
+	if s := o.Snapshot(); s.Playhead == nil || s.Playhead.PositionMS != 25 {
+		t.Fatalf("progress during verification replaced the sample: %+v", s.Playhead)
+	}
+	observed := o.Snapshot().ObservedAt
+	if err := o.refresh(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	if s := o.Snapshot(); s.MediaStale || s.Media.ID != "track-1" || s.Playhead == nil || s.Playhead.PositionMS != 25 || s.ObservedAt != observed {
+		t.Fatalf("same identity dropped the sample or renewed the baseline: %+v", s)
+	}
+	deliverObservationEvent(c, o, "event/player_now_playing_changed", "pid=9007199254740993")
+	mid.Store("track-2")
+	if err := o.refresh(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	if s := o.Snapshot(); s.Media.ID != "track-2" || s.Playhead != nil || s.MediaStale {
+		t.Fatalf("new media kept the previous playhead: %+v", s)
+	}
+	deliverObservationEvent(c, o, "event/player_now_playing_progress", "pid=9007199254740993&cur_pos=4&duration=10")
+	deliverObservationEvent(c, o, "event/player_now_playing_changed", "pid=9007199254740993")
+	qid.Store("2")
+	if err := o.refresh(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	if s := o.Snapshot(); s.Media.QueueID != "2" || s.Playhead != nil {
+		t.Fatalf("new queue entry kept the previous playhead: %+v", s)
+	}
+	deliverObservationEvent(c, o, "event/player_now_playing_progress", "pid=9007199254740993&cur_pos=6&duration=10")
+	if err := o.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if s := o.Snapshot(); s.Playhead != nil || s.Stale || s.Media.ID != "track-2" {
+		t.Fatalf("full observation kept a playhead: %+v", s.Playhead)
+	}
+}
+
+func TestPlayheadSampleDuringTargetedRead(t *testing.T) {
+	for _, tc := range []struct {
+		name, command string
+		run           func(*Observer) error
+	}{
+		{name: "playback", command: "player/get_now_playing_media", run: func(o *Observer) error { return o.RefreshPlayback(context.Background()) }},
+		{name: "scalars", command: "player/get_mute", run: func(o *Observer) error { return o.RefreshScalars(context.Background(), "volume") }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var race atomic.Bool
+			seen := make(chan struct{}, 1)
+			server := newFakeHEOS(t, func(c net.Conn, u *url.URL, _ int64) {
+				if race.Load() && commandName(u) == tc.command {
+					sendEvent(c, "event/player_now_playing_progress", "pid=9007199254740993&cur_pos=40&duration=200")
+					select {
+					case <-seen:
+					case <-time.After(800 * time.Millisecond):
+					}
+				}
+				observationReply(c, u, "serial-A")
+			})
+			client := fakeClient(t, server)
+			o, _ := NewObserver(client, Identity{Key: "room", Serial: "serial-A"}, ObservationCacheTTL)
+			if err := o.Refresh(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			deliverObservationEvent(client, o, "event/player_now_playing_progress", "pid=9007199254740993&cur_pos=5&duration=200")
+			go func() {
+				for e := range client.Events() {
+					o.Notify(e)
+					if p := o.Snapshot().Playhead; p != nil && p.PositionMS == 40 {
+						select {
+						case seen <- struct{}{}:
+						default:
+						}
+					}
+				}
+			}()
+			race.Store(true)
+			if err := tc.run(o); err != nil {
+				t.Fatal(err)
+			}
+			if s := o.Snapshot(); s.Playhead == nil || s.Playhead.PositionMS != 40 || s.Playhead.DurationMS != 200 || s.Stale {
+				t.Fatalf("targeted read restored the pre-read sample: %+v", s.Playhead)
+			}
+		})
+	}
+}
+
 func TestObservationMediaEventOnlyReadsMetadataWithoutPostponingBackup(t *testing.T) {
 	var full, media, queue atomic.Int32
 	server := newFakeHEOS(t, func(c net.Conn, u *url.URL, _ int64) {

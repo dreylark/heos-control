@@ -88,6 +88,7 @@ func (o *Observer) RefreshScalars(ctx context.Context, kind string) error {
 	if !o.scalarBaselineValid(o.last) || o.last.Token != before || !view.Connected || view.Token != s.Token {
 		return ErrStale
 	}
+	s.Playhead = o.playheadForMedia(s.Media, s.State)
 	s.EventUpdated = true
 	o.last = s
 	o.writePending &^= fields

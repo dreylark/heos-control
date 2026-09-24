@@ -1,6 +1,7 @@
 package heos
 
 import (
+	"math"
 	"net/url"
 	"testing"
 )
@@ -69,6 +70,27 @@ func TestEventData(t *testing.T) {
 				t.Fatal("unknown event was attributed", d)
 			}
 		})
+	}
+}
+
+func TestProgressValuesFitPublicInt64(t *testing.T) {
+	fit := (Event{Command: "event/player_now_playing_progress", Params: url.Values{
+		"pid": {"1"}, "cur_pos": {"9223372036854775807"}, "duration": {"9223372036854775807"},
+	}}).Data()
+	if !fit.Valid || !fit.HasProgress || fit.Position != math.MaxInt64 || fit.Duration != math.MaxInt64 {
+		t.Fatalf("in-range sample: %+v", fit)
+	}
+	over := (Event{Command: "event/player_now_playing_progress", Params: url.Values{
+		"pid": {"1"}, "cur_pos": {"9223372036854775808"}, "duration": {"0"},
+	}}).Data()
+	if !over.Valid || over.HasProgress || over.Position != 0 || over.Duration != 0 {
+		t.Fatalf("oversized sample must stay valid and unprojected: %+v", over)
+	}
+	zero := (Event{Command: "event/player_now_playing_progress", Params: url.Values{
+		"pid": {"1"}, "cur_pos": {"0"}, "duration": {"0"},
+	}}).Data()
+	if !zero.Valid || !zero.HasProgress || zero.Position != 0 || zero.Duration != 0 {
+		t.Fatalf("zero sample: %+v", zero)
 	}
 }
 
