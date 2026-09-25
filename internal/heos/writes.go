@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -22,6 +23,7 @@ type Mutation struct {
 	Shuffle   bool
 	Item      Item
 	Append    bool // Queue only: append a resolved track or container without restarting playback.
+	QueueIDs  []ID // Remove only: exact observed queue occurrences; never a numeric range.
 }
 
 func (m Mutation) command() (string, url.Values, error) {
@@ -91,6 +93,19 @@ func (m Mutation) command() (string, url.Values, error) {
 			a.Set("mid", string(i.MediaID))
 		}
 		return "browse/add_to_queue", a, nil
+	case MutationKindRemove:
+		if len(m.QueueIDs) == 0 || len(m.QueueIDs) > 1000 {
+			return "", nil, ErrBounds
+		}
+		ids := make([]string, len(m.QueueIDs))
+		for i, id := range m.QueueIDs {
+			ids[i] = string(id)
+		}
+		if err := validateQueueRemoval(ids); err != nil {
+			return "", nil, err
+		}
+		a.Set("qid", strings.Join(ids, ","))
+		return "player/remove_from_queue", a, nil
 	default:
 		return "", nil, ErrReadOnly
 	}

@@ -52,9 +52,13 @@ flowchart LR
 2. The coordinator looks up the idempotency key before mutable admission checks.
    New work needs a fresh observation, matching physical identity and TLS pin,
    an ungrouped target, and explicitly enabled writes with a verified ceiling.
-3. One PostgreSQL transaction records the operation, idempotency mapping and
-   device reservation. Transactions never remain open across device I/O or
-   timers. Only a newly created, confirmed admission starts execution.
+   A supplied `expected_owner` independently fences a takeover against its
+   captured reservation before cancelling an existing worker. The journal still
+   checks the replaced operation ID and revision atomically at admission.
+3. One PostgreSQL transaction records the operation and idempotency mapping,
+   creating a device reservation or verifying a buffered parent's existing one.
+   Transactions never remain open across device I/O or timers. Only a newly
+   created, confirmed admission starts execution.
 4. HTTP `202` reports durable admission, not successful playback. Execution uses
    an application-owned context and survives the submitting client's disconnect.
    A matching retry returns the original operation without repeating selection
@@ -64,7 +68,8 @@ flowchart LR
    A synchronous, nonblocking event callback updates ownership; the existing
    bounded event consumer also forwards events to the observer. There is no
    additional socket or event reader for active playback.
-6. Finalization records the outcome and releases the reservation atomically.
+6. Finalization records the outcome and releases any reservation owned by that
+   operation atomically. A child result leaves its parent's reservation intact.
    An uncertain journal acknowledgement is resolved by reading the intended
    record and revision, never by repeating device commands.
 
@@ -139,11 +144,12 @@ and native queue replacement before starting the monotonic ramp/hold/fade
 schedule. It verifies the complete queue and the current media ID/queue ID pair.
 Missed volume steps are skipped instead of being sent in a burst.
 
-Natural transitions and manual Next/Previous within that unchanged queue preserve
-the original schedule. `POST /skip` does not. It is a separate direct mutation:
-without takeover it is refused while an operation owns the player, and takeover
-releases the run, including the stop timer, before sending one native next or
-previous command. Confirmation is bounded readback of a different current entry
+Natural transitions and manual Next/Previous within the unchanged queue preserve
+the original schedule. Ordinary `POST /skip` needs takeover while an operation
+owns the player, releasing that run and its stop timer before navigation.
+Buffered playback additionally accepts a same-principal Skip as a durable child
+operation executed by its existing worker; the parent keeps ownership and its
+timeline. Confirmation requires bounded readback of a different current entry
 in the same complete queue, not the native reply. Stop or `unknown` suspends writes for up to twelve seconds,
 capped by the playback deadline. A temporary mismatched media/queue ID pair can
 also enter that read-only wait when both identifiers belong to the owned queue.
@@ -168,8 +174,8 @@ fresh state and queue validation before each attempt.
 ## Ordered queue loading
 
 The optional `item_refs` input is one frozen ordered plan, not a series of client
-queue mutations. Admission resolves every part before device writes, under a
-20-second budget, with at most 32 parts and 10,000 tracks. Parts are tracks or
+queue mutations. By default, admission resolves every part before device writes,
+under a 20-second budget, with at most 32 parts and 10,000 tracks. Parts are tracks or
 leaf local containers from one source. `item_ref` keeps its existing recursive
 membership behavior. Ordered plans require native shuffle off; selection,
 permutation, playlist publication and lifetime remain client responsibilities.
@@ -187,11 +193,56 @@ bounded by twelve seconds and the original playback end. If a confirmed partial
 load reaches the end with unsent parts, final fade/Stop runs and completion is
 `queue_loading_incomplete`. Uncertain delivery still revokes future writes.
 
-The journal's existing JSON columns store the request, an ordered-plan digest
-(including every MID and repeat), part track counts and independent queue-loading
-progress. Complete memberships remain in the owned in-memory execution; recovery
+The journal's existing JSON columns store the request, an ordered-plan digest,
+part track counts and independent queue-loading progress. Eager plans include
+every ordered MID and repeat in their digest; buffered plans include captured
+part identities, declared counts and the initially prepared contents. Complete memberships remain in the owned in-memory execution; recovery
 never reconstructs or resumes them. The public projection exposes only counts,
 not native identifiers. Existing timeline fields keep their persisted shape.
+
+## Buffered queue loading
+
+The opt-in `buffered` policy accepts up to 256 immutable part references and
+10,000 declared track occurrences. Admission captures each source/container
+identity into operation-owned descriptors and validates only the first two parts
+within the existing admission budget. Later parts have a five-second preparation
+budget when needed. HTTP reference expiry does not discard a captured descriptor;
+a connection or catalog-generation change invalidates it. Unread future content
+has no admission-time membership snapshot, so publishers must retain immutable
+playlists. Later validation can fail after playback has started.
+
+The existing playback worker waits for confirmed position and appends one part
+when the remaining resident entries reach the requested threshold. Progress
+notifications remain display-only and initiate no device reads. Queue position
+uses an exact MID/QID occurrence and the complete confirmed resident sequence.
+Before a part would exceed the resident bound, the worker removes a played
+prefix while retaining the requested Previous history. Native removal may
+renumber QIDs; confirmation compares the full remaining ordered sequence and
+rebases the current occurrence, without guessing from numeric IDs. See
+[Queue decisions](QUEUE_DECISIONS.md) for conservative transition handling.
+
+Prune, append, Skip and volume commands share the existing transport and
+expectation/guard path. Each maintenance step issues at most one command so the
+worker can reconsider Stop, the envelope and navigation before more I/O. The
+reservation remains held while more parts need loading. Without automation,
+confirmation of the final part completes loading and releases control; otherwise
+the requested finite session limit releases control without stopping resident
+music. With automation, the original fade/Stop takes precedence and unused parts
+are normal. No new maintenance starts at the fade boundary.
+
+A same-principal buffered Skip has a separate durable operation and idempotency
+mapping. Admission atomically checks the parent's reservation, physical device,
+epoch and principal; it creates no second device reservation. One pending or
+not-yet-finalized child is allowed. Its parent worker dispatches it between
+commands and retains the parent's deadline. Child finalization is journal-only;
+Stop, cancellation and shutdown close queued work without a speculative send.
+Restart interrupts unfinished parent and child operations without replay.
+
+Progress separates cumulative confirmed tracks from resident tracks, remaining
+tracks, pruned occurrences and the absolute current plan index. These counts
+survive terminal history reads, but neither they nor a persisted manifest resume
+playback after restart. Playlist retention must cover audio that may continue
+playing after the operation releases ownership.
 
 ## Persistence and lifecycle
 

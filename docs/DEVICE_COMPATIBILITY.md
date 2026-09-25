@@ -56,6 +56,7 @@ subscription authorizes writes.
 | Catalog | Configured local sources, bounded HEOS browsing and expiring opaque item references |
 | Direct controls | Play/Pause/Stop, next/previous, volume, mute, repeat/shuffle and native queue replacement |
 | Bounded playback | Confirmed local media selection, ramp/hold/fade and owned Stop |
+| Buffered queue | Ordered part loading with confirmed reserve, played-prefix removal and retained Previous history |
 | Events | Registration, typed validated fields, continuity/gap handling and idle heartbeat |
 | Diagnostics | Read-only identity/connectivity probes and redacted completion evidence |
 
@@ -111,6 +112,19 @@ event captures of official HEOS app playback confirmed sustained Play at volume
 0 with 199 queue entries. One capture matched all 199 All Audio MIDs and their
 metadata; that queue was already present in the initial snapshot, so its
 construction was not observed. Events do not expose the app's commands.
+
+Explicit pagination checks on the same firmware at volume 0 did not make a
+large container playable in portions. Browsing `range=0,98` or `range=99,197`
+and then replacing the queue with that same container left the queue empty
+for 15 seconds. Adding `range` directly to `browse/add_to_queue` with `aid=4`
+also left it empty for `0,98`, `99,197` and `198,198`. With `aid=3`, ranges
+`0,98` and `99,197` left an existing 11-track playing queue unchanged for
+15 seconds. The control album played normally: `range=0,0` with `aid=4`
+loaded all 11 tracks, and with `aid=3` appended all 11 (22 total), instead of
+selecting one track. Replies echoed the supplied `range` and reported success;
+complete queue readbacks showed that it did not restrict membership. These
+checks provide no range-based queue-loading alternative on this firmware.
+The test queue was cleared and the player left stopped at volume 0.
 
 A separate app packet capture contained encrypted TLS application data on TCP
 10101. Plaintext renderer HTTP on TCP 60006 contained only `GetPositionInfo`
@@ -186,6 +200,60 @@ checks do not establish a track-count or response-size limit. An advertised
 playable container and a successful command reply do not confirm queue
 application. The service retains an uncertain outcome for an unconfirmed
 replacement and does not replay it automatically.
+
+### Played-prefix removal
+
+Separate native CLI checks on **Denon Home 150 firmware 3.139.170**, through
+pinned TLS at volume **0**, exercised `player/remove_from_queue` (4.2.17).
+An 11-track album was queued twice, retaining repeated MIDs as distinct queue
+occurrences. After navigation to the fourth entry, removing the first two
+produced exactly the expected 20-entry ordered suffix. The device reassigned
+remaining QIDs from `1..22` to `1..20`; the current QID changed from 4 to 2 while
+the current MID, its logical occurrence and Play were preserved. A second
+played-prefix removal reduced 20 entries to 19 with the same guarantees.
+Complete confirmations took approximately 1.18 and 1.20 seconds.
+
+For the first removal, the final success reply arrived before a now-playing
+notification and then a queue notification. The first complete queue read and
+subsequent media read already showed the settled suffix and rebased current
+occurrence. This trace does not establish an atomic update or universal event
+order. Progress continued advancing. Next worked, and Previous immediately
+after that Next returned to the retained preceding occurrence. An earlier
+Previous after longer playback briefly reported the preceding entry and then
+returned to the original entry with reset progress; it was not treated as a
+confirmed navigation to a different entry. No playback errors were reported.
+Cleanup confirmed Stop, an empty queue and volume 0.
+
+These native checks alone qualify the removal path on that device and firmware,
+not all capacities, long-running sessions or controller integration.
+In particular, they do not qualify removal racing with natural navigation or
+ambiguous repeated-current-MID transitions. The controller retains conservative
+bounded confirmation for those cases and never assumes QID stability.
+
+### Buffered controller playback
+
+A subsequent check used the implemented controller through its public HTTPS API,
+an isolated local journal and a configured volume ceiling of **0**, on the same
+Home 150 firmware. The plan repeated an 11-track album three times, with refill
+threshold 10, resident limit 24 and one retained Previous entry. The first two
+parts loaded to 22 entries in approximately 1.9 seconds; the third remained
+unloaded while the reserve exceeded the threshold.
+
+Eleven same-principal API Next operations completed as independent Skip results
+while the playback operation retained ownership. The eleventh reached the refill
+threshold: the controller removed ten played entries and appended the last part.
+The completed plan reported 33 cumulatively confirmed tracks, ten pruned tracks,
+23 resident tracks and absolute current index 11. A complete native read matched
+the exact ordered suffix, including repeated MIDs, with current playback at the
+second resident occurrence after QID reassignment. The runtime sent exactly three
+queue additions, one removal and eleven Next commands; its sole volume setter
+requested 0. No playback errors were recorded.
+
+This qualifies that bounded refill/prune and same-owner Skip sequence, not a
+10,000-track session, arbitrary queue capacity, long-duration recovery or pruning
+concurrent with uncontrolled navigation. Cleanup used confirmed API Stop, ended
+the test controller and cleared the test queue; the final state was Stop with an
+empty queue and volume 0.
 
 ## Event semantics and failure limits
 

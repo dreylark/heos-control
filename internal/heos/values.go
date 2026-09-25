@@ -69,4 +69,5 @@ const (
 	MutationKindSkip      MutationKind = "skip"
 	MutationKindMode      MutationKind = "mode"
 	MutationKindQueue     MutationKind = "queue"
+	MutationKindRemove    MutationKind = "remove"
 )

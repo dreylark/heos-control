@@ -164,12 +164,37 @@ func (c *Coordinator) automate(l *lane, r *execution, a Automation) error {
 			if err := c.write(l, r, heos.Mutation{Kind: heos.MutationKindTransport, State: heos.PlayStateStop}); err != nil {
 				return err
 			}
-			if r.moreParts() {
+			if r.moreParts() && r.buffered == nil {
 				return errQueueLoadingIncomplete
 			}
 			return nil
 		}
-		if r.moreParts() && c.clock.Now().Before(r.appendUntil) {
+		if r.buffered != nil {
+			if handled, err := c.serviceBufferedSkip(l, r); handled || err != nil {
+				if err != nil {
+					return err
+				}
+				phase = ""
+				continue
+			}
+			if !r.observationPending() {
+				if changed, err := r.updateBufferedProgress(); err != nil {
+					return err
+				} else if changed {
+					if err := c.transition(r.ctx, r, journal.Update{State: journal.Running, Phase: phase}); err != nil {
+						return err
+					}
+				}
+				if acted, err := c.bufferedStep(l, r); acted || err != nil {
+					if err != nil && !errors.Is(err, errPlaybackTimelineChanged) {
+						return err
+					}
+					phase = ""
+					continue
+				}
+			}
+		}
+		if r.buffered == nil && r.moreParts() && c.clock.Now().Before(r.appendUntil) {
 			if err := c.appendNext(l, r); err != nil && !errors.Is(err, errPlaybackTimelineChanged) {
 				return err
 			}

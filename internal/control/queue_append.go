@@ -12,10 +12,16 @@ import (
 var errQueueLoadingIncomplete = errors.New("playback window ended before queue loading completed")
 
 type QueueLoadingProgress struct {
-	TotalParts      int `json:"total_parts"`
-	ConfirmedParts  int `json:"confirmed_parts"`
-	TotalTracks     int `json:"total_tracks"`
-	ConfirmedTracks int `json:"confirmed_tracks"`
+	Mode             string     `json:"mode,omitempty"`
+	BufferedTracks   *int       `json:"buffered_tracks,omitempty"`
+	RemainingTracks  *int       `json:"remaining_tracks,omitempty"`
+	CurrentIndex     *int       `json:"current_index,omitempty"`
+	PrunedTracks     *int       `json:"pruned_tracks,omitempty"`
+	SessionExpiresAt *time.Time `json:"session_expires_at,omitempty"`
+	TotalParts       int        `json:"total_parts"`
+	ConfirmedParts   int        `json:"confirmed_parts"`
+	TotalTracks      int        `json:"total_tracks"`
+	ConfirmedTracks  int        `json:"confirmed_tracks"`
 }
 
 // Keep the existing timeline fields at the root of journal progress, so old
@@ -37,6 +43,15 @@ func (c *Coordinator) confirmPart(r *execution) error {
 	r.mu.Lock()
 	r.loading = r.moreParts()
 	r.mu.Unlock()
+	if r.buffered != nil {
+		if r.buffered.expires.IsZero() {
+			r.buffered.expires = r.playbackStarted.Add(time.Duration(r.buffered.policy.MaxSessionSeconds) * time.Second)
+			r.playbackDeadline, r.appendUntil = r.buffered.expires, r.buffered.expires
+		}
+		if _, err := r.updateBufferedProgress(); err != nil {
+			return err
+		}
+	}
 	return c.transition(r.ctx, r, journal.Update{State: journal.Running, Phase: "queue_loading"})
 }
 func (c *Coordinator) appendNext(l *lane, r *execution) error {
@@ -53,6 +68,9 @@ func (c *Coordinator) appendNext(l *lane, r *execution) error {
 	return c.confirmPart(r)
 }
 func (c *Coordinator) loadRemaining(l *lane, r *execution) error {
+	if r.buffered != nil {
+		return c.loadBuffered(l, r)
+	}
 	for r.moreParts() {
 		if err := c.checkJournal(r); err != nil {
 			return err

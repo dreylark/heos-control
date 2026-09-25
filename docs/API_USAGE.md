@@ -65,8 +65,10 @@ queue. `media_id` is an optional opaque service identifier derived from native
 media identity, without exposing the native ID or a media URL. It supports
 equality within the same player/source and running process; display-text changes
 do not change it, but a service restart may. Repeated occurrences of the same
-media may have different queue IDs. Neither identifier is a playable `item_ref`
-or a Gerbera library ID. Missing identifiers are omitted.
+media may have different queue IDs. Queue edits, including buffered playback
+pruning, can reassign those IDs; do not use them as permanent plan positions.
+Neither identifier is a playable `item_ref` or a Gerbera library ID. Missing
+identifiers are omitted.
 
 Media identity, labels and freshness participate in player `revision` and the
 detail ETag. A metadata change can therefore invalidate `If-Match` for a new
@@ -109,8 +111,10 @@ The client selects a media item or container and retains its current `item_ref`.
 A catalog item with `kind: media` and `playable: true` can start a single
 song/track. For containers, the service accepts `playable: false` after bounded
 traversal validates a nonempty set of playable song/track members. This flag
-reflects HEOS browse metadata. Both preflight and playback reject any unsuitable
-media member before device writes. Source entries are for browsing only.
+reflects HEOS browse metadata. In ordinary playback, preflight and admission
+reject unsuitable media members before device writes. Buffered playback
+validates later parts when needed, as described below. Source entries are for
+browsing only.
 Queue replacement uses `browse/add_to_queue` with the container id
 (HEOS CLI Protocol Specification 1.17, 4.4.11, aid 4).
 The same body is accepted by preflight and playback. This is an illustrative
@@ -181,8 +185,9 @@ started.** Follow the returned `Location` or operation ID until terminal.
 Preflight is optional and can become outdated before submission: playback checks
 admission independently. A regular player read can supply the initial revision.
 
-Omit `automation` for a short playback operation that completes after confirmed
-queue/start and leaves music playing without a timer. With automation, all four
+Without `automation`, playback completes after all requested loading is confirmed
+and leaves music playing without a Stop timer. Buffered loading can remain
+active between refills until it completes or reaches its session limit. With automation, all four
 fields are required: duration 1..7200 seconds, fade 0..60 and less than duration,
 ramp from 0 through `duration - fade`, and `0 <= initial <= target <= ceiling`.
 Repeat must be off. The ramp and final fade fit inside the original duration;
@@ -209,7 +214,8 @@ operation. Exactly one field is required. For example:
 }
 ```
 
-The list accepts 1..32 references from one configured local music source. Each
+Without `buffered`, the list accepts 1..32 references from one configured local
+music source. Each
 reference must resolve to a playable track or a leaf container whose direct
 children are playable tracks. Nested containers, empty parts, expired references
 and mixed sources are rejected before any device write. All parts are resolved
@@ -256,6 +262,96 @@ Persist and retry the **same entire body, key and precondition**. Changing the
 reference order under the same idempotency key conflicts. Do not submit each
 part as a separate playback operation.
 
+## Buffered multipart playback
+
+Add `buffered` to an ordered `item_refs` request to load a reserve of upcoming
+tracks. Clients choose the complete order, including any shuffle, and publish
+immutable parts. The service decides when to append and remove played entries.
+Native shuffle and repeat must both be off.
+
+```json
+{
+  "item_refs": ["part-1", "part-2", "part-3", "part-4", "part-5"],
+  "buffered": {
+    "part_tracks": [30, 50, 50, 50, 19],
+    "refill_threshold": 10,
+    "max_queue_tracks": 100,
+    "retain_previous": 5,
+    "max_session_seconds": 86400
+  },
+  "queue_mode": "replace",
+  "shuffle": false,
+  "repeat": "off",
+  "initial_volume": {"unit": "heos", "level": 0},
+  "takeover": false
+}
+```
+
+Replace the illustrative references with current catalog references. This example
+starts 30 tracks, then adds one part when at most ten resident entries remain
+after the current occurrence. If the next part would exceed 100 resident entries,
+the service first removes a played prefix while retaining five Previous entries.
+It confirms each complete queue before proceeding. QIDs can change after removal;
+position follows confirmed occurrences, including repeated tracks.
+
+| Input | Bounds and meaning |
+| --- | --- |
+| `item_refs` | 1..256 references from one configured source; immutable parts in playback order |
+| `part_tracks` | One exact positive count per reference; a direct track declares one; at most 10,000 tracks in total, including repeats |
+| `refill_threshold` | 1..100 entries after the current occurrence |
+| `max_queue_tracks` | 2..1,000 resident entries, including current and retained history |
+| `retain_previous` | 0..100 played entries retained when pruning |
+| `max_session_seconds` | 1..86,400 seconds from first confirmed Play; at least the automation duration when supplied |
+
+Every part must fit together with the refill threshold, retained history and
+current entry: `part_tracks[i] + refill_threshold + retain_previous + 1 <=
+max_queue_tracks`. These are application bounds, not a qualified firmware
+capacity. Request and journal size limits still apply.
+
+Preflight and admission capture all part identities and declared counts, but
+fully enumerate only the first two parts, or the sole part in a one-part plan.
+Later parts are enumerated and checked before use. Thus a ready preflight or
+202 does not guarantee that every future part is playable: a missing part,
+changed count, invalid content or invalidated catalog can end loading after
+music has started. No admission snapshot of unread future track contents exists;
+keeping those playlists immutable is the publisher's responsibility. Captured
+descriptors outlive HTTP reference expiry, but catalog or connection invalidation
+never triggers selection of a replacement container by name.
+
+The operation retains the player reservation while future additions are needed.
+Without automation, it succeeds when the final part is confirmed; this means
+loading finished, not that every track was listened to. If the session expires
+first, it becomes `released` with `session_expired`, ends future control, and
+leaves resident music playing. Restart likewise does not resume refills, pruning
+or Stop. Keep playlists and their media available while any resident entry can
+still play, including after release, completion or restart.
+
+With automation, the timeline starts at the first confirmed Play. Refills and
+pruning serialize with navigation and volume changes; no new queue maintenance
+starts at the fade boundary. An unused tail is normal in buffered mode and does
+not cause `queue_loading_incomplete`. Failed or uncertain dispatched commands
+still retain their failures or uncertainty. Cancellation, Pause, incompatible
+manual changes and lost ownership revoke future writes under the same rules as
+ordinary playback.
+
+Buffered `queue_loading` adds these fields to the existing counts:
+
+| Field | Meaning |
+| --- | --- |
+| `mode` | `buffered` |
+| `buffered_tracks` | Last confirmed number of resident entries |
+| `remaining_tracks` | Resident entries after the current occurrence |
+| `current_index` | Zero-based occurrence in the complete ordered plan |
+| `pruned_tracks` | Cumulative count removed from the played prefix |
+| `session_expires_at` | Session bound anchored to first confirmed Play |
+
+`confirmed_parts` and `confirmed_tracks` are cumulative and never decrease when
+old entries are removed. Position and resident fields can be absent before their
+first confirmation. These are durable progress snapshots, not playhead samples;
+use the player's confirmed `now_playing` for current display. Previous reaches
+only retained resident history. Selecting an entry outside that queue requires a
+new playback selection, not arithmetic on a native queue ID.
+
 ## Ownership and intervention
 
 An accepted bounded run belongs to the service, independent of the client's
@@ -292,8 +388,17 @@ quoted `If-Match`. Stop and cancellation do not require a player revision.
 `takeover: true` adds an operator-scope requirement. Creator/operator and player
 authorization still apply to cancellation.
 
-`release` abandons future automation without stopping music and cannot specify a
-nonzero fade. `stop_owned` stops only while the target operation still owns
+Playback, volume, mute and transport requests can add `expected_owner` alongside
+`takeover: true`. Capture the target's `active_operation` ID when deciding to
+take over. The service checks that owner separately from `If-Match`: a different
+or absent owner returns 412 before revoking its worker or issuing writes. This
+matters because a reservation change alone does not change the player revision.
+Keep `expected_owner`, the body, key and precondition unchanged on retries;
+a matching admitted retry returns its original operation even after ownership
+changes. Omitting this field retains ordinary explicit takeover behavior.
+
+`release` abandons future control, including buffered loading, without stopping
+music and cannot specify a nonzero fade. `stop_owned` stops only while the target operation still owns
 playback. Operator `/stop` is an independent priority command and may interrupt
 another operation. It still requires a reachable device, database and valid
 admission evidence; it is not an emergency hardware-off mechanism.
@@ -320,13 +425,25 @@ The service attempts one bounded read-only refresh so later volume and transport
 commands can use current state. If that refresh fails, ordinary controls remain
 unavailable until observation recovers. The rejected command is never replayed.
 
-Skip follows the other direct controls. While an operation owns the player,
-`takeover: false` returns 409. `takeover: true` requires operator scope, releases
-that run, including its stop timer, and then skips. Observed manual or natural
-Next/Previous during an owned run still preserves the ramp, fade and stop
-deadline; that observation is not this command. Shuffle can make the confirmed
-entry non-adjacent. Repeat-one and an unchanged entry are not reported as a
-confirmed skip.
+For active buffered playback, its creator can submit Skip with
+`takeover: false` and the usual current `If-Match`. Skip has its own durable
+operation ID, result and idempotency key, while `active_operation` remains the
+playback operation. The same playback worker sends it between commands, without
+releasing the plan or its timeline. Only one pending or not-yet-finalized Skip is
+accepted; another returns 429. Navigation is limited to the resident queue. A
+boundary reached before dispatch fails only that Skip with `not_skippable`;
+other write failures or uncertain delivery also stop future plan writes.
+
+Other principals and ordinary active playback retain the 409 busy response for
+`takeover: false`. `takeover: true` requires operator scope, releases the owning
+run, including its stop timer, and then skips. Priority Stop or cancellation can
+release a queued buffered Skip without sending it. Retries of its original key
+return its own outcome; restart never replays it.
+
+Observed manual or natural Next/Previous during an owned run still preserves
+the ramp, fade and stop deadline. Shuffle can make the confirmed entry
+non-adjacent. Repeat-one and an unchanged entry are not reported as a confirmed
+skip.
 
 ## Retries and errors
 

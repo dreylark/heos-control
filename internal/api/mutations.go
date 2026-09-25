@@ -35,7 +35,10 @@ func (s *Server) submit(ctx context.Context, player, key, match string, body any
 	return control.ProjectOperation(op), e
 }
 func playbackCommand(body PlaybackInput) control.Command {
-	cmd := control.Command{Kind: control.CommandKindPlayback, ItemRef: value(body.ItemRef, ""), ItemRefs: body.ItemRefs, Level: body.InitialVolume.Level, Shuffle: body.Shuffle, Repeat: heos.Repeat(body.Repeat), Takeover: body.Takeover}
+	cmd := control.Command{Kind: control.CommandKindPlayback, ItemRef: value(body.ItemRef, ""), ItemRefs: body.ItemRefs, Level: body.InitialVolume.Level, Shuffle: body.Shuffle, Repeat: heos.Repeat(body.Repeat), Takeover: body.Takeover, ExpectedOwner: value(body.ExpectedOwner, "")}
+	if b := body.Buffered; b != nil {
+		cmd.Buffered = &control.BufferedPlayback{PartTracks: append([]int(nil), b.PartTracks...), RefillThreshold: b.RefillThreshold, MaxQueueTracks: b.MaxQueueTracks, RetainPrevious: b.RetainPrevious, MaxSessionSeconds: b.MaxSessionSeconds}
+	}
 	if a := body.Automation; a != nil {
 		cmd.Automation = &control.Automation{TargetLevel: a.TargetVolume.Level, RampSeconds: a.RampSeconds, DurationSeconds: a.DurationSeconds, FadeSeconds: a.FadeSeconds}
 	}
@@ -51,21 +54,21 @@ func (s *Server) Playback(ctx context.Context, r PlaybackRequestObject) (Playbac
 	return Playback202JSONResponse{Body: op, Headers: Playback202ResponseHeaders{Location: "/v1/operations/" + op.ID}}, nil
 }
 func (s *Server) SetVolume(ctx context.Context, r SetVolumeRequestObject) (SetVolumeResponseObject, error) {
-	op, e := s.submit(ctx, r.Player, r.Params.IdempotencyKey, value(r.Params.IfMatch, ""), r.Body, control.Command{Kind: control.CommandKindVolume, Level: r.Body.Level, Takeover: r.Body.Takeover})
+	op, e := s.submit(ctx, r.Player, r.Params.IdempotencyKey, value(r.Params.IfMatch, ""), r.Body, control.Command{Kind: control.CommandKindVolume, Level: r.Body.Level, Takeover: r.Body.Takeover, ExpectedOwner: value(r.Body.ExpectedOwner, "")})
 	if e != nil {
 		return nil, e
 	}
 	return SetVolume202JSONResponse{Body: op, Headers: SetVolume202ResponseHeaders{Location: "/v1/operations/" + op.ID}}, nil
 }
 func (s *Server) SetMute(ctx context.Context, r SetMuteRequestObject) (SetMuteResponseObject, error) {
-	op, e := s.submit(ctx, r.Player, r.Params.IdempotencyKey, value(r.Params.IfMatch, ""), r.Body, control.Command{Kind: control.CommandKindMute, Muted: r.Body.Muted, Takeover: r.Body.Takeover})
+	op, e := s.submit(ctx, r.Player, r.Params.IdempotencyKey, value(r.Params.IfMatch, ""), r.Body, control.Command{Kind: control.CommandKindMute, Muted: r.Body.Muted, Takeover: r.Body.Takeover, ExpectedOwner: value(r.Body.ExpectedOwner, "")})
 	if e != nil {
 		return nil, e
 	}
 	return SetMute202JSONResponse{Body: op, Headers: SetMute202ResponseHeaders{Location: "/v1/operations/" + op.ID}}, nil
 }
 func (s *Server) SetTransport(ctx context.Context, r SetTransportRequestObject) (SetTransportResponseObject, error) {
-	op, e := s.submit(ctx, r.Player, r.Params.IdempotencyKey, value(r.Params.IfMatch, ""), r.Body, control.Command{Kind: control.CommandKindTransport, State: heos.PlayState(r.Body.State), Takeover: r.Body.Takeover})
+	op, e := s.submit(ctx, r.Player, r.Params.IdempotencyKey, value(r.Params.IfMatch, ""), r.Body, control.Command{Kind: control.CommandKindTransport, State: heos.PlayState(r.Body.State), Takeover: r.Body.Takeover, ExpectedOwner: value(r.Body.ExpectedOwner, "")})
 	if e != nil {
 		return nil, e
 	}

@@ -43,6 +43,13 @@ func (j *memoryJournal) Active(_ context.Context, p string) (journal.Operation, 
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	for _, o := range j.ops {
+		var args struct {
+			OwnerID string `json:"owner_operation_id"`
+		}
+		_ = json.Unmarshal(o.EffectiveArguments, &args)
+		if args.OwnerID != "" {
+			continue
+		}
 		if o.Player == p && o.FinishedAt == nil && o.Phase != "cancelling" {
 			return o, nil
 		}
@@ -67,6 +74,12 @@ func (j *memoryJournal) Admit(ctx context.Context, r journal.Request, p journal.
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
+	if p.OwnerID != "" {
+		owner, ok := j.ops[p.OwnerID]
+		if !ok || p.Kind != "skip" || p.ReplaceID != "" || owner.FinishedAt != nil || owner.Kind != "playback" || owner.Player != r.Player || owner.Principal != r.Principal || owner.DeviceKey != p.DeviceKey {
+			return journal.Admission{}, journal.ErrRevision
+		}
+	}
 	if p.ReplaceID != "" {
 		o := j.ops[p.ReplaceID]
 		o.Revision++
@@ -84,7 +97,7 @@ func (j *memoryJournal) Admit(ctx context.Context, r journal.Request, p journal.
 		j.ops[o.ID] = o
 	}
 	id := "op_" + r.Key
-	o := journal.Operation{ID: id, Player: r.Player, Principal: r.Principal, Kind: p.Kind, State: journal.Accepted, Revision: 1, EffectiveArguments: p.EffectiveArguments}
+	o := journal.Operation{ID: id, Player: r.Player, DeviceKey: p.DeviceKey, Principal: r.Principal, Kind: p.Kind, State: journal.Accepted, Revision: 1, EffectiveArguments: p.EffectiveArguments}
 	j.ops[id] = o
 	j.keys[r.Key] = id
 	return journal.Admission{Operation: o, Created: true}, nil

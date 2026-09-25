@@ -68,7 +68,7 @@ func diagnosticCommand(command string) string {
 		return command
 	}
 	switch command {
-	case "system/register_for_change_events", "player/set_volume", "player/set_mute", "player/set_play_state", "player/play_next", "player/play_previous", "player/set_play_mode", "browse/add_to_queue",
+	case "system/register_for_change_events", "player/set_volume", "player/set_mute", "player/set_play_state", "player/play_next", "player/play_previous", "player/set_play_mode", "player/remove_from_queue", "browse/add_to_queue",
 		"event/sources_changed", "event/players_changed", "event/groups_changed", "event/player_state_changed", "event/player_now_playing_changed", "event/player_now_playing_progress", "event/player_playback_error", "event/player_queue_changed", "event/player_volume_changed", "event/repeat_mode_changed", "event/shuffle_mode_changed", "event/group_volume_changed", "event/user_changed":
 		return command
 	}

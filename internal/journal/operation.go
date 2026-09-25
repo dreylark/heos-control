@@ -70,6 +70,10 @@ type Request struct {
 // media resolution outside the transaction. NotBefore/NotAfter come from the
 // validated caller window. It contains no passwords, tokens or TLS private keys.
 type Proposal struct {
+	// OwnerID admits a Skip command for the active playback worker. The parent
+	// keeps the sole device reservation; this child has its own durable request
+	// identity and terminal result. It cannot be combined with a handoff.
+	OwnerID string
 	// Replace is an optimistic atomic handoff, after the old worker has joined.
 	ReplaceUncertain   bool
 	ReplaceID          string
