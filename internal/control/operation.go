@@ -45,10 +45,14 @@ func ProjectOperation(op journal.Operation) Operation {
 	// transition (including recovery there), no part is durably confirmed.
 	if progress.QueueLoading == nil {
 		var args struct {
-			Plan *playbackPlanIdentity `json:"ordered_plan"`
+			Plan    *playbackPlanIdentity `json:"ordered_plan"`
+			Command Command               `json:"command"`
 		}
 		if json.Unmarshal(op.EffectiveArguments, &args) == nil && args.Plan != nil && len(args.Plan.PartTracks) > 0 {
 			progress.QueueLoading = &QueueLoadingProgress{TotalParts: len(args.Plan.PartTracks)}
+			if args.Command.Buffered != nil {
+				progress.QueueLoading.Mode = "buffered"
+			}
 			for _, count := range args.Plan.PartTracks {
 				progress.QueueLoading.TotalTracks += count
 			}

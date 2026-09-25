@@ -195,6 +195,10 @@ func (r *execution) expect(m heos.Mutation) {
 			shuffle = "on"
 		}
 		add("event/shuffle_mode_changed", map[string]string{"shuffle": shuffle})
+	case heos.MutationKindRemove:
+		r.keepExpectations = true
+		add("event/player_queue_changed", map[string]string{})
+		add("event/player_now_playing_changed", map[string]string{})
 	case heos.MutationKindQueue:
 		if m.Append {
 			// Notifications carry no origin. Keep the bounded queue hint until

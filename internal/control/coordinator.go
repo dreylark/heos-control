@@ -56,20 +56,22 @@ const (
 
 // Command is validated policy input; wire identifiers are resolved internally.
 type Command struct {
-	Kind        CommandKind    `json:"kind"`
-	Level       int            `json:"level"`
-	Muted       bool           `json:"muted"`
-	State       heos.PlayState `json:"state"`
-	Direction   string         `json:"direction,omitempty"`
-	Takeover    bool           `json:"takeover"`
-	ItemRef     string         `json:"item_ref"`
-	ItemRefs    []string       `json:"item_refs,omitempty"`
-	Shuffle     bool           `json:"shuffle"`
-	Repeat      heos.Repeat    `json:"repeat"`
-	Mode        string         `json:"mode"`
-	FadeSeconds int            `json:"fade_seconds"`
-	Target      string         `json:"target"`
-	Automation  *Automation    `json:"automation,omitempty"`
+	Kind          CommandKind       `json:"kind"`
+	Level         int               `json:"level"`
+	Muted         bool              `json:"muted"`
+	State         heos.PlayState    `json:"state"`
+	Direction     string            `json:"direction,omitempty"`
+	Takeover      bool              `json:"takeover"`
+	ExpectedOwner string            `json:"expected_owner,omitempty"`
+	ItemRef       string            `json:"item_ref"`
+	ItemRefs      []string          `json:"item_refs,omitempty"`
+	Shuffle       bool              `json:"shuffle"`
+	Repeat        heos.Repeat       `json:"repeat"`
+	Mode          string            `json:"mode"`
+	FadeSeconds   int               `json:"fade_seconds"`
+	Target        string            `json:"target"`
+	Automation    *Automation       `json:"automation,omitempty"`
+	Buffered      *BufferedPlayback `json:"buffered,omitempty"`
 }
 type controlClock interface {
 	Now() time.Time
@@ -102,45 +104,48 @@ type lane struct {
 	run          *execution
 }
 type execution struct {
-	metrics          *operationMetrics // shared with journal-only handoff reconciliation
-	targetMetrics    *operationMetrics // cancellation target has its own completion
-	id               string
-	ctx              context.Context
-	cancel           context.CancelCauseFunc
-	done             chan struct{}
-	mu               sync.Mutex
-	op               journal.Operation
-	phase            string // protected by mu; event-time phase without reading worker-owned op
-	expected         heos.Snapshot
-	events           map[string][]map[string]string
-	inflight         bool
-	uncertain        bool
-	unconfirmed      bool
-	rejectedWrite    bool                  // worker-owned; read failures do not trigger write recovery
-	parts            []playbackPart        // immutable ordered plan; nil for legacy selection
-	ordered          []heos.ID             // worker-owned target queue for the pending part
-	queueLoading     *QueueLoadingProgress // worker-owned durable confirmed counts
-	loading          bool                  // protected by mu; active multipart queue loading
-	playbackStarted  time.Time             // worker-owned first confirmed playback
-	appendUntil      time.Time             // worker-owned; no append sends at/after fade
-	members          map[heos.ID]bool
-	confirmed        int
-	playbackDeadline time.Time           // worker-owned monotonic end of the envelope
-	progress         *PlaybackProgress   // worker-owned; persisted with every phase change
-	bounded          bool                // immutable; complete queue observations for bounded playback/cancellation
-	queueOwned       bool                // protected by mu; enabled only after native queue readback
-	queueStart       queueStartPhase     // protected by mu; pending queue command lifecycle
-	scalar           *scalarConfirmation // protected by mu; pending scalar observation, distinct from command reply
-	queueWait        time.Time           // protected by mu; zero outside an active track transition
-	automating       bool                // protected by mu; only the bounded playback worker may wait for Next
-	keepExpectations bool                // protected by mu; skip retains transitional state events until readback
-	now              func() time.Time    // immutable operation clock
-	wake             chan struct{}       // immutable, coalesces observation hints from the existing callback
-	eventRevision    uint64              // protected by mu; relevant events only
-	observedRevision uint64              // protected by mu; revision at the start of the last successful read
-	lastReadAttempt  time.Time           // worker-owned; bounds polling even after a stale/failed observation
-	lastRead         time.Time           // worker-owned monotonic time of the last complete observation
-	observedAt       time.Time           // worker-owned timestamp of that snapshot, never renewed by events
+	metrics             *operationMetrics // shared with journal-only handoff reconciliation
+	targetMetrics       *operationMetrics // cancellation target has its own completion
+	id                  string
+	ctx                 context.Context
+	cancel              context.CancelCauseFunc
+	done                chan struct{}
+	mu                  sync.Mutex
+	op                  journal.Operation
+	phase               string // protected by mu; event-time phase without reading worker-owned op
+	expected            heos.Snapshot
+	events              map[string][]map[string]string
+	inflight            bool
+	uncertain           bool
+	unconfirmed         bool
+	rejectedWrite       bool                  // worker-owned; read failures do not trigger write recovery
+	buffered            *bufferedPlayback     // immutable policy; worker-owned preparation and position
+	bufferedSkip        *bufferedSkip         // protected by mu; admitted child serviced by this worker
+	bufferedSkipsClosed bool                  // protected by mu
+	parts               []playbackPart        // immutable ordered plan; nil for legacy selection
+	ordered             []heos.ID             // worker-owned target queue for the pending part
+	queueLoading        *QueueLoadingProgress // worker-owned durable confirmed counts
+	loading             bool                  // protected by mu; active multipart queue loading
+	playbackStarted     time.Time             // worker-owned first confirmed playback
+	appendUntil         time.Time             // worker-owned; no append sends at/after fade
+	members             map[heos.ID]bool
+	confirmed           int
+	playbackDeadline    time.Time           // worker-owned monotonic end of the envelope
+	progress            *PlaybackProgress   // worker-owned; persisted with every phase change
+	bounded             bool                // immutable; complete queue observations for bounded playback/cancellation
+	queueOwned          bool                // protected by mu; enabled only after native queue readback
+	queueStart          queueStartPhase     // protected by mu; pending queue command lifecycle
+	scalar              *scalarConfirmation // protected by mu; pending scalar observation, distinct from command reply
+	queueWait           time.Time           // protected by mu; zero outside an active track transition
+	automating          bool                // protected by mu; only the bounded playback worker may wait for Next
+	keepExpectations    bool                // protected by mu; skip retains transitional state events until readback
+	now                 func() time.Time    // immutable operation clock
+	wake                chan struct{}       // immutable, coalesces observation hints from the existing callback
+	eventRevision       uint64              // protected by mu; relevant events only
+	observedRevision    uint64              // protected by mu; revision at the start of the last successful read
+	lastReadAttempt     time.Time           // worker-owned; bounds polling even after a stale/failed observation
+	lastRead            time.Time           // worker-owned monotonic time of the last complete observation
+	observedAt          time.Time           // worker-owned timestamp of that snapshot, never renewed by events
 }
 type Coordinator struct {
 	logger    *slog.Logger
@@ -313,12 +318,18 @@ func (c *Coordinator) Submit(ctx context.Context, request journal.Request, cmd C
 		return journal.Operation{}, e
 	}
 	if cmd.FadeSeconds < 0 || cmd.FadeSeconds > 60 || cmd.Level < 0 || cmd.Level > 100 ||
-		(cmd.Kind == CommandKindSkip && cmd.Direction != "next" && cmd.Direction != "previous") {
+		(cmd.Kind == CommandKindSkip && cmd.Direction != "next" && cmd.Direction != "previous") ||
+		(cmd.Buffered != nil && cmd.Kind != CommandKindPlayback) || cmd.validateExpectedOwner() != nil {
 		return journal.Operation{}, heos.ErrBounds
 	}
 	// Freeze caller-owned optional settings before admitting asynchronous work.
 	if cmd.ItemRefs != nil {
 		cmd.ItemRefs = append([]string{}, cmd.ItemRefs...)
+	}
+	if cmd.Buffered != nil {
+		settings := *cmd.Buffered
+		settings.PartTracks = append([]int(nil), settings.PartTracks...)
+		cmd.Buffered = &settings
 	}
 	if cmd.Automation != nil {
 		settings := *cmd.Automation
@@ -365,7 +376,18 @@ func (c *Coordinator) Submit(ctx context.Context, request journal.Request, cmd C
 	if e != nil && !errors.Is(e, journal.ErrNotFound) {
 		return journal.Operation{}, e
 	}
+	// A player revision excludes reservation identity. A guarded takeover must
+	// match its captured owner before it can revoke any in-memory worker.
+	if cmd.ExpectedOwner != "" && (e != nil || old.ID != cmd.ExpectedOwner) {
+		return journal.Operation{}, ErrPrecondition
+	}
 	if e == nil && !priority && !cmd.Takeover {
+		l.mu.Lock()
+		owner := l.run
+		l.mu.Unlock()
+		if cmd.Kind == CommandKindSkip && owner != nil && owner.id == old.ID && owner.buffered != nil {
+			return c.submitBufferedSkip(ctx, l, owner, old, request, cmd)
+		}
 		return journal.Operation{}, journal.ErrBusy
 	}
 	if cmd.Kind == CommandKindCancel && (old.ID != cmd.Target || old.Phase == "cancelling") {
@@ -534,12 +556,18 @@ func (c *Coordinator) Submit(ctx context.Context, request journal.Request, cmd C
 	}
 	run.bounded = cmd.Automation != nil || len(parts) > 0
 	run.parts = parts
+	if cmd.Buffered != nil {
+		run.buffered = &bufferedPlayback{policy: *cmd.Buffered}
+	}
 	if len(parts) > 0 {
 		run.ordered = append([]heos.ID(nil), parts[0].IDs...)
 		run.queueLoading = &QueueLoadingProgress{TotalParts: len(parts)}
 		for _, part := range parts {
-			run.queueLoading.TotalTracks += len(part.IDs)
+			run.queueLoading.TotalTracks += part.trackCount()
 		}
+	}
+	if run.buffered != nil {
+		run.queueLoading.Mode = "buffered"
 	}
 	if cmd.Kind == CommandKindCancel && cmd.Mode == "stop_owned" && previous != nil {
 		run.bounded = previous.bounded

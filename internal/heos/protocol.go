@@ -110,7 +110,7 @@ func parseRange(value string) (int, int, error) {
 }
 
 func validateEcho(args, params url.Values) error {
-	for _, key := range []string{"pid", "gid", "sid", "cid", "SEQUENCE"} {
+	for _, key := range []string{"pid", "gid", "sid", "cid", "qid", "SEQUENCE"} {
 		if args.Has(key) && params.Has(key) && args.Get(key) != params.Get(key) {
 			return ErrProtocol
 		}
@@ -145,6 +145,18 @@ func encodeCommand(name string, args url.Values) ([]byte, error) {
 		}
 	}
 	query := strings.ReplaceAll(args.Encode(), "+", "%20")
+	if name == "player/remove_from_queue" {
+		ids := strings.Split(args.Get("qid"), ",")
+		if err := validateQueueRemoval(ids); err != nil {
+			return nil, err
+		}
+		for i, id := range ids {
+			ids[i] = strings.ReplaceAll(url.QueryEscape(id), "+", "%20")
+		}
+		// Only the list separators are syntax; each opaque ID stays escaped.
+		encoded := "qid=" + strings.ReplaceAll(url.QueryEscape(args.Get("qid")), "+", "%20")
+		query = strings.Replace(query, encoded, "qid="+strings.Join(ids, ","), 1)
+	}
 	if args.Has("range") {
 		start, end, err := parseRange(args.Get("range"))
 		if err != nil {

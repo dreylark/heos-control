@@ -135,6 +135,11 @@ Preserve these checks when adding or changing a scenario:
   track start or advance a scenario.
 - Check connection/goroutine cleanup on failure, including an expectation failure
   while the transport waits for its reply.
+- Buffered sessions must cover threshold waits without progress-triggered reads,
+  deferred content failure, expiry without Stop, pruning with renumbered QIDs,
+  duplicate current MIDs, concurrent navigation and original envelope deadlines.
+  Same-owner Skip tests must retain one writer/reservation, independent child
+  idempotency, bounded pending work and unsent cancellation/restart outcomes.
 - Record synthetic assumptions and distinguish a reconstructed incident from a
   captured trace. Remove private addresses, identifiers, URLs and credentials.
 
@@ -159,6 +164,7 @@ go test ./internal/control -run='^$' -fuzz='^FuzzQueueTransitionPolicy$' \
 | Package | Target | Boundary |
 | --- | --- | --- |
 | `internal/heos` | `FuzzHEOSCommandEncoding` | Command encoding and argument separation |
+| `internal/heos` | `FuzzHEOSQueueRemoval` | Opaque queue occurrence IDs, literal list delimiters and frame confinement |
 | `internal/heos` | `FuzzHEOSFrameBoundaries` | Framing, split/coalesced input and malformed replies |
 | `internal/heos` | `FuzzHEOSEventProjection` | Event decoding/projection and incomplete evidence |
 | `internal/control` | `FuzzQueueStartPolicy` | Initial queue confirmation |

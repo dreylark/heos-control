@@ -13,12 +13,15 @@ import (
 const maxPlaybackParts = 32
 
 type playbackPart struct {
-	Item heos.Item `json:"item"`
-	IDs  []heos.ID `json:"ids"`
+	Item         heos.Item  `json:"item"`
+	IDs          []heos.ID  `json:"ids"`
+	Count        int        `json:"count,omitempty"`
+	CatalogToken heos.Token `json:"-"`
 }
 
-// Durable identity retains part order/counts and a digest of every ordered MID,
-// including repeats. Recovery never reconstructs or resumes device commands.
+// Durable identity retains declared part counts and a digest of descriptors
+// plus prepared content. Buffered future content is deliberately not enumerated.
+// Recovery never reconstructs or resumes device commands.
 type playbackPlanIdentity struct {
 	SHA256     string `json:"sha256"`
 	PartTracks []int  `json:"part_tracks"`
@@ -31,7 +34,7 @@ func planIdentity(parts []playbackPart) *playbackPlanIdentity {
 	b, _ := json.Marshal(parts)
 	p := &playbackPlanIdentity{SHA256: fmt.Sprintf("%x", sha256.Sum256(b))}
 	for _, part := range parts {
-		p.PartTracks = append(p.PartTracks, len(part.IDs))
+		p.PartTracks = append(p.PartTracks, part.trackCount())
 	}
 	return p
 }
@@ -41,9 +44,19 @@ func validatePlaybackSelection(cmd Command) error {
 		return heos.ErrBounds
 	}
 	if cmd.ItemRefs == nil {
+		if cmd.Buffered != nil {
+			return heos.ErrBounds
+		}
 		return nil
 	}
-	if len(cmd.ItemRefs) == 0 || len(cmd.ItemRefs) > maxPlaybackParts || cmd.Shuffle {
+	limit := maxPlaybackParts
+	if cmd.Buffered != nil {
+		if err := cmd.Buffered.validate(cmd); err != nil {
+			return err
+		}
+		limit = maxBufferedParts
+	}
+	if len(cmd.ItemRefs) == 0 || len(cmd.ItemRefs) > limit || cmd.Shuffle {
 		return heos.ErrBounds
 	}
 	for _, ref := range cmd.ItemRefs {
@@ -57,6 +70,9 @@ func validatePlaybackSelection(cmd Command) error {
 func (s *Reads) resolvePlayback(ctx context.Context, d Device, cmd Command) (heos.Item, map[heos.ID]bool, []playbackPart, error) {
 	if err := validatePlaybackSelection(cmd); err != nil {
 		return heos.Item{}, nil, nil, err
+	}
+	if cmd.Buffered != nil {
+		return s.resolveBufferedPlayback(ctx, d, cmd)
 	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()

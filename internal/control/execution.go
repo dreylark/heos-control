@@ -77,10 +77,10 @@ func (c *Coordinator) writeOnce(l *lane, r *execution, m heos.Mutation) (err err
 	if waited && m.Kind == heos.MutationKindVolume {
 		return errPlaybackTimelineChanged
 	}
-	if m.Append && !r.appendUntil.IsZero() && !c.clock.Now().Before(r.appendUntil) {
+	if (m.Append || m.Kind == heos.MutationKindRemove) && !r.appendUntil.IsZero() && !c.clock.Now().Before(r.appendUntil) {
 		return errPlaybackTimelineChanged
 	}
-	if r.automating && m.Kind == heos.MutationKindVolume && m.Level > 0 && !c.clock.Now().Before(r.playbackDeadline) {
+	if ((r.automating && m.Kind == heos.MutationKindVolume && m.Level > 0) || (r.buffered != nil && m.Kind == heos.MutationKindSkip)) && !r.playbackDeadline.IsZero() && !c.clock.Now().Before(r.playbackDeadline) {
 		return errPlaybackTimelineChanged
 	}
 	if e := mutationSafety(l, fresh, m.Kind == heos.MutationKindSkip); e != nil {
@@ -89,8 +89,24 @@ func (c *Coordinator) writeOnce(l *lane, r *execution, m heos.Mutation) (err err
 	if m.Kind == heos.MutationKindSkip {
 		before, fresh, e = c.prepareSkip(r.ctx, l, m.Direction, before, fresh)
 		if e != nil {
+			if r.buffered != nil && errors.Is(e, ErrNotSkippable) {
+				// Navigation can reach the boundary while this child waits. The
+				// parent still needs that confirmed position to schedule refills.
+				r.mu.Lock()
+				changes := r.ownedChanges(before, fresh)
+				if len(changes) == 0 {
+					r.expected = fresh
+				}
+				r.mu.Unlock()
+				if len(changes) != 0 {
+					return ownershipMismatch("before_write_changed", changes, before, fresh)
+				}
+			}
 			return e
 		}
+	}
+	if r.buffered != nil && (m.Kind == heos.MutationKindQueue || m.Kind == heos.MutationKindRemove) && !sameCatalog(r.parts[0].CatalogToken, fresh.Token) {
+		return heos.ErrStaleReference
 	}
 	c.traceSnapshot(r, "before_write", fresh)
 	r.mu.Lock()
@@ -103,6 +119,11 @@ func (c *Coordinator) writeOnce(l *lane, r *execution, m heos.Mutation) (err err
 	if !same {
 		return ownershipMismatch("before_write_changed", changes, before, fresh)
 	}
+	// A valid Previous may make the prepared prefix unsafe. Keep the reconciled
+	// position before replanning, so the next step cannot repeat a stale decision.
+	if m.Kind == heos.MutationKindRemove && !r.removalAllowed(fresh, m) {
+		return errPlaybackTimelineChanged
+	}
 	if e := c.transition(r.ctx, r, journal.Update{State: journal.Running, Phase: "sending_" + string(m.Kind)}); e != nil {
 		r.mu.Lock()
 		r.uncertain = true
@@ -110,14 +131,14 @@ func (c *Coordinator) writeOnce(l *lane, r *execution, m heos.Mutation) (err err
 		return fmt.Errorf("journal unavailable: %w", e)
 	}
 	guardDuration := 5 * time.Second
-	if m.Append && !r.appendUntil.IsZero() {
+	if (m.Append || m.Kind == heos.MutationKindRemove) && !r.appendUntil.IsZero() {
 		remaining := r.appendUntil.Sub(c.clock.Now())
 		if remaining <= 0 {
 			return errPlaybackTimelineChanged
 		}
 		guardDuration = min(guardDuration, remaining)
 	}
-	if r.automating && m.Kind == heos.MutationKindVolume && m.Level > 0 {
+	if ((r.automating && m.Kind == heos.MutationKindVolume && m.Level > 0) || (r.buffered != nil && m.Kind == heos.MutationKindSkip)) && !r.playbackDeadline.IsZero() {
 		remaining := r.playbackDeadline.Sub(c.clock.Now())
 		if remaining <= 0 {
 			return errPlaybackTimelineChanged
@@ -184,7 +205,7 @@ func (c *Coordinator) writeOnce(l *lane, r *execution, m heos.Mutation) (err err
 		}
 		expected.State = after.State
 		expected.Media = after.Media
-	case heos.MutationKindQueue:
+	case heos.MutationKindQueue, heos.MutationKindRemove:
 		expected.State = heos.PlayStatePlay
 		expected.Media = after.Media
 		expected.Queue = after.Queue
@@ -227,9 +248,12 @@ func (c *Coordinator) writeOnce(l *lane, r *execution, m heos.Mutation) (err err
 	return context.Cause(r.ctx)
 }
 func (c *Coordinator) execute(l *lane, r *execution, cmd Command, item heos.Item) {
+	defer c.closeBufferedSkips(r)
 	budget := time.Duration(cmd.FadeSeconds+30) * time.Second
 	if cmd.Automation != nil {
 		budget += time.Duration(cmd.Automation.DurationSeconds) * time.Second
+	} else if r.buffered != nil {
+		budget += time.Duration(r.buffered.policy.MaxSessionSeconds)*time.Second + playbackConfirmationTimeout
 	} else if len(r.parts) > 0 {
 		budget += time.Duration(len(r.parts)) * playbackConfirmationTimeout
 	}
@@ -310,6 +334,12 @@ func (c *Coordinator) execute(l *lane, r *execution, cmd Command, item heos.Item
 		}
 		if errors.Is(e, heos.ErrRejected) {
 			code, outcome = "device_rejected", "rejected"
+		}
+		if errors.Is(e, errBufferedSessionExpired) {
+			state, code, outcome = journal.Released, "session_expired", "confirmed"
+		}
+		if errors.Is(e, errBufferedCapacity) {
+			code = "buffer_capacity"
 		}
 		if errors.Is(e, errQueueLoadingIncomplete) {
 			code, outcome = "queue_loading_incomplete", "confirmed"

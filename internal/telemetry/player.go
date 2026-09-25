@@ -154,20 +154,20 @@ var (
 		"player/get_players", "player/get_player_info", "player/get_play_state", "player/get_volume", "player/get_mute",
 		"player/get_play_mode", "player/get_now_playing_media", "player/get_queue", "group/get_groups", "group/get_group_info",
 		"browse/get_music_sources", "browse/get_source_info", "browse/browse", "browse/add_to_queue",
-		"player/set_volume", "player/set_mute", "player/set_play_state", "player/play_next", "player/play_previous", "player/set_play_mode",
+		"player/set_volume", "player/set_mute", "player/set_play_state", "player/play_next", "player/play_previous", "player/set_play_mode", "player/remove_from_queue",
 	}
 	wireResults         = []string{"reply_success", "reply_rejected", "uncertain"}
 	confirmationResults = []string{"confirmed", "timeout", "released", "rejected", "uncertain", "cancelled"}
 	gapReasons          = []string{"connection_closed", "event_buffer_overflow"}
 	scopes              = []string{"full", "media", "scalars", "playback"}
 	triggers            = []string{"startup", "event", "audit", "recovery", "admission", "preflight", "prewrite", "confirmation", "fallback", "manual"}
-	mutationKinds       = []string{"volume", "mute", "mode", "transport", "skip", "queue"}
+	mutationKinds       = []string{"volume", "mute", "mode", "transport", "skip", "queue", "remove"}
 	scalarKinds         = []string{"volume", "mute", "mode"}
 	operationKinds      = []string{"volume", "mute", "transport", "skip", "playback", "stop", "cancel"}
 	terminalStates      = []string{"succeeded", "failed", "cancelled", "released", "interrupted", "uncertain"}
-	phases              = []string{"accepted", "preparing", "sending_volume", "sending_mute", "sending_mode", "sending_queue", "queue_loading", "sending_transport", "sending_skip", "ramping", "playing", "fading", "stopping", "cancelling", "persisting", "unknown"}
+	phases              = []string{"accepted", "preparing", "sending_volume", "sending_mute", "sending_mode", "sending_queue", "sending_remove", "queue_loading", "sending_transport", "sending_skip", "ramping", "playing", "fading", "stopping", "cancelling", "persisting", "unknown"}
 	operationReasons    = []string{
-		"completed", "command_timeout", "confirmation_timeout", "device_unavailable", "device_rejected", "not_skippable", "journal_unavailable", "queue_loading_incomplete",
+		"completed", "command_timeout", "confirmation_timeout", "device_unavailable", "device_rejected", "not_skippable", "journal_unavailable", "queue_loading_incomplete", "session_expired", "buffer_capacity",
 		"service_stopping", "ownership_lost", "ownership_revoked", "unexpected_event", "event_gap", "queue_transition_timeout", "grouped_target",
 		"before_write_changed", "readback_changed", "active_state_changed", "pending_readback_changed", "queue_transition_changed",
 		"queue_media_not_selected", "queue_contains_unselected_media", "queue_incomplete_or_invalid", "queue_media_not_found",

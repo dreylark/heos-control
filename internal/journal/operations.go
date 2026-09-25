@@ -202,6 +202,19 @@ func (s *Store) Admit(ctx context.Context, request Request, proposal Proposal) (
 	if count >= s.maxOperations {
 		return Admission{}, ErrCapacity
 	}
+	if proposal.OwnerID != "" {
+		if proposal.Kind != "skip" || proposal.ReplaceID != "" || proposal.ReplaceRevision != 0 || proposal.ReplaceUncertain {
+			return Admission{}, ErrInvalid
+		}
+		owner, ownerErr := q.ActiveOperation(ctx, request.Player)
+		if ownerErr != nil && !errors.Is(ownerErr, pgx.ErrNoRows) {
+			return Admission{}, fmt.Errorf("read reservation for owned command: %w", ownerErr)
+		}
+		if ownerErr != nil || owner.ID != proposal.OwnerID || owner.DeviceKey != proposal.DeviceKey ||
+			owner.Epoch != s.epoch || owner.Kind != "playback" || owner.Principal != request.Principal || owner.FinishedAt.Valid {
+			return Admission{}, ErrRevision
+		}
+	}
 	if proposal.ReplaceID != "" {
 		old, e := q.ActiveOperation(ctx, request.Player)
 		if e != nil && !errors.Is(e, pgx.ErrNoRows) {
@@ -234,12 +247,14 @@ func (s *Store) Admit(ctx context.Context, request Request, proposal Proposal) (
 		Endpoint: request.Endpoint, Key: request.Key, RequestHash: hash, OperationID: row.ID, ExpiresAt: timestamp(now.Add(Retention))}); err != nil {
 		return Admission{}, fmt.Errorf("insert idempotency record: %w", err)
 	}
-	if err := q.ReserveDevice(ctx, dbgen.ReserveDeviceParams{DeviceKey: proposal.DeviceKey, OperationID: row.ID, Epoch: s.epoch}); err != nil {
-		var pgerr *pgconn.PgError
-		if errors.As(err, &pgerr) && pgerr.Code == "23505" && pgerr.ConstraintName == "device_reservations_pkey" {
-			return Admission{}, ErrBusy
+	if proposal.OwnerID == "" {
+		if err := q.ReserveDevice(ctx, dbgen.ReserveDeviceParams{DeviceKey: proposal.DeviceKey, OperationID: row.ID, Epoch: s.epoch}); err != nil {
+			var pgerr *pgconn.PgError
+			if errors.As(err, &pgerr) && pgerr.Code == "23505" && pgerr.ConstraintName == "device_reservations_pkey" {
+				return Admission{}, ErrBusy
+			}
+			return Admission{}, fmt.Errorf("reserve device: %w", err)
 		}
-		return Admission{}, fmt.Errorf("reserve device: %w", err)
 	}
 	if err := s.commit(ctx, tx); err != nil {
 		// Release the transaction/connection before resolving, including pools of

@@ -108,6 +108,43 @@ never replayed. An automation append is additionally capped by the original
 playback end. Ordinary multipart loading uses the same transition policy without
 a service Stop timer.
 
+## Buffered refill and prefix removal
+
+Buffered mode chooses maintenance from the exact current MID/QID occurrence in
+the complete confirmed queue. It counts resident entries after that occurrence,
+not numeric QID differences or elapsed track duration. If the reserve is above
+`refill_threshold`, it sends no queue command. Otherwise it validates the next
+immutable part and either appends it or first makes room within
+`max_queue_tracks`. Missing or stale position never authorizes maintenance.
+
+Pruning removes only a played prefix, excludes the current entry and retains
+`retain_previous` entries. The executor rechecks that prefix against the final
+fresh observation before sending, so a concurrent Previous can make pruning
+ineligible. One maintenance iteration sends at most one command; navigation,
+Stop/cancel and volume deadlines are reconsidered before an append follows a
+prune. Queue maintenance stops at the automation fade boundary.
+
+Removal uses `player/remove_from_queue` (HEOS CLI Protocol Specification 1.17,
+4.2.17), with an expectation registered before send and the existing twelve-second
+confirmation deadline. Full readback must be the exact remaining ordered suffix,
+including duplicates, with complete membership and unique nonempty QIDs. QIDs
+may be reassigned after removal; they are never treated as permanent positions.
+An unchanged queue must still retain its original QIDs. Partial removal and
+permitted non-atomic state/media updates allow only bounded read-only waiting.
+
+Removal confirmation requires the pre-command current occurrence rebased into
+the remaining suffix. A repeated MID paired with an old QID could accidentally
+identify a different valid occurrence after renumbering, so mere membership is
+insufficient. Concurrent navigation that cannot establish the rebased current
+occurrence stays pending and can end in uncertainty; the service does not guess
+which occurrence the user intended. Changed controls, unexpected membership,
+Pause or lost continuity revoke future writes. No uncertain removal is replayed.
+
+After confirmed removal, the occurrence offset advances by the removed count;
+cumulative loaded counts do not decrease. New native QIDs become the basis for
+subsequent observations and guards. Prefix removal alone neither starts a new
+track nor renews the playback/session deadline.
+
 ## Active event rules
 
 Before this table, the callback validates the target player and continuity and
@@ -130,9 +167,10 @@ State events report state, not who initiated a transition (5.4); a now-playing
 notification does not report queue membership (5.5). Natural advancement and
 manual Next/Previous therefore follow the same unchanged-queue policy. Manual
 Stop followed by Play inside the wait window may also preserve the run. API Stop
-and Pause cancel immediately. `POST /skip` is not an event in this table: it is
-a new operation that is refused while a run is active unless takeover releases
-that run first.
+and Pause cancel immediately. `POST /skip` is not an event in this table.
+For buffered playback, a same-principal Skip can be admitted as a durable child
+and dispatched by the existing worker without changing the parent deadline.
+Other active-owner cases require takeover, which releases the run first.
 
 ## Active observation rules
 
@@ -184,5 +222,9 @@ background observation. Useful starting points are
 [`queue_policy_test.go`](../internal/control/queue_policy_test.go),
 [`queue_loading_test.go`](../internal/control/queue_loading_test.go),
 [`queue_transition_test.go`](../internal/control/queue_transition_test.go) and
-[`wire_test.go`](../internal/control/wire_test.go). Validation commands and the
+[`wire_test.go`](../internal/control/wire_test.go). Buffered preparation,
+refill/pruning and child navigation also have focused regressions in
+[`buffered_playback_test.go`](../internal/control/buffered_playback_test.go),
+[`buffered_execution_test.go`](../internal/control/buffered_execution_test.go) and
+[`progressive_skip_test.go`](../internal/control/progressive_skip_test.go). Validation commands and the
 limits of synthetic evidence are in [Testing](TESTING.md).

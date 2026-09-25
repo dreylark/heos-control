@@ -553,6 +553,9 @@ func (c *Client) exchange(ctx context.Context, g *generation, name string, args 
 			if r.Result != "success" {
 				return r, rejection(r)
 			}
+			if name == "player/remove_from_queue" && (!r.Params.Has("pid") || !r.Params.Has("qid")) {
+				return out, &CommandError{Uncertain, ErrProtocol}
+			}
 			return r, nil
 		}
 	}

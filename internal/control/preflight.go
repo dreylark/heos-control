@@ -21,7 +21,7 @@ func (s *Reads) Preflight(ctx context.Context, key string, cmd Command) (Preflig
 	if err != nil {
 		return Preflight{}, err
 	}
-	if cmd.Kind != CommandKindPlayback || validatePlaybackSelection(cmd) != nil || cmd.Level < 0 || cmd.Level > 100 {
+	if cmd.Kind != CommandKindPlayback || validatePlaybackSelection(cmd) != nil || cmd.validateExpectedOwner() != nil || cmd.Level < 0 || cmd.Level > 100 {
 		return Preflight{}, heos.ErrBounds
 	}
 	// Malformed automation is an input error; the configured ceiling is a separate

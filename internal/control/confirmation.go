@@ -27,7 +27,7 @@ func (c *Coordinator) confirmReadback(l *lane, r *execution, m heos.Mutation, be
 		return c.confirmScalar(l, r, m)
 	}
 	deadline := c.clock.Now().Add(playbackConfirmationTimeout)
-	if m.Append && !r.playbackDeadline.IsZero() {
+	if (m.Append || m.Kind == heos.MutationKindRemove || (r.buffered != nil && m.Kind == heos.MutationKindSkip)) && !r.playbackDeadline.IsZero() {
 		deadline = minTime(deadline, r.playbackDeadline)
 	}
 	ctx, cancel := context.WithTimeout(heos.WithObservationTrigger(r.ctx, "confirmation"), max(0, deadline.Sub(c.clock.Now())))
@@ -69,6 +69,10 @@ func (c *Coordinator) confirmReadback(l *lane, r *execution, m heos.Mutation, be
 					return after, nil // Caller retains final ownership/write checks.
 				case queueStartAbort:
 					return after, d.Err
+				}
+			case heos.MutationKindRemove:
+				if confirmed, err := c.removeObservation(ctx, l, r, before, after, len(m.QueueIDs)); confirmed || err != nil {
+					return after, err
 				}
 			case heos.MutationKindSkip:
 				if err = deviceObservationSafety(l.device.Config, after); err != nil {
