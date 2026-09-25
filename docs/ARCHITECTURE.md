@@ -165,6 +165,34 @@ outcomes invalidate the connection generation and are not replayed. A stale guar
 may be retried at most three times only when delivery is proven not sent, with
 fresh state and queue validation before each attempt.
 
+## Ordered queue loading
+
+The optional `item_refs` input is one frozen ordered plan, not a series of client
+queue mutations. Admission resolves every part before device writes, under a
+20-second budget, with at most 32 parts and 10,000 tracks. Parts are tracks or
+leaf local containers from one source. `item_ref` keeps its existing recursive
+membership behavior. Ordered plans require native shuffle off; selection,
+permutation, playlist publication and lifetime remain client responsibilities.
+
+The same worker replaces the first part and appends each remaining part between
+automation actions. No separate connection, event consumer, timer or writer is
+introduced. Confirmation preserves the complete old MID/QID prefix and checks
+the exact ordered suffix, including repeats. Current media may advance within
+that queue. Events request observation; they do not prove command origin.
+
+The first confirmed playback anchors the monotonic envelope before persisting
+loading progress. Append I/O consumes that window. New appends stop at the fade
+boundary, with a current-token send guard capped there; confirmation remains
+bounded by twelve seconds and the original playback end. If a confirmed partial
+load reaches the end with unsent parts, final fade/Stop runs and completion is
+`queue_loading_incomplete`. Uncertain delivery still revokes future writes.
+
+The journal's existing JSON columns store the request, an ordered-plan digest
+(including every MID and repeat), part track counts and independent queue-loading
+progress. Complete memberships remain in the owned in-memory execution; recovery
+never reconstructs or resumes them. The public projection exposes only counts,
+not native identifiers. Existing timeline fields keep their persisted shape.
+
 ## Persistence and lifecycle
 
 Database loss fails readiness, rejects new mutations and suspends automation

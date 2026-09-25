@@ -82,7 +82,7 @@ func (c *Coordinator) queueObservationDecision(ctx context.Context, l *lane, r *
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	d := decideQueueObservation(queuePolicyState{
-		Owned: r.queueOwned, Automating: r.automating, ExpectedState: before.State,
+		Owned: r.queueOwned, Automating: r.automating || r.loading, ExpectedState: before.State,
 		WaitUntil: r.queueWait, PlaybackUntil: r.playbackDeadline,
 	}, queueObservationFacts{
 		Now: c.clock.Now(), Before: before, Observed: fresh,

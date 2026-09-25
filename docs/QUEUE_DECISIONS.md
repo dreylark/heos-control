@@ -78,6 +78,36 @@ A full snapshot with the exact current token and a player revision advanced
 beyond the pre-command observation can cover events received during that read.
 An older snapshot or partial event projection cannot clear those pending hints.
 
+## Ordered replacement and append
+
+`item_refs` adds an exact ordered check to initial confirmation. An observed
+proper prefix of the requested first part waits (`queue_order_pending`) within
+the same deadline; a different sequence aborts (`queue_order_changed`). Complete
+confirmation includes repeated MIDs and unique QIDs. Legacy `item_ref` membership
+semantics remain unchanged.
+
+Each subsequent `aid=3` uses the existing command/observation loop with append
+expectations registered before send. [`queue_append.go`](../internal/control/queue_append.go)
+checks these boundaries under the event mutex:
+
+1. Cancellation, device safety, continuity and unchanged controls still apply.
+2. Every previously confirmed MID/QID must remain at its position. Observed
+   additional entries must be an exact prefix of the expected suffix, with no
+   missing old entries, extra tracks or reused QIDs.
+3. Stop/unknown, empty media and hybrid identifiers from that same queue permit
+   read-only waiting. Pause, foreign media or queue edits revoke ownership.
+4. Only Play with the entire requested sequence, a valid current MID/QID and no
+   uncovered newer event confirms the append. Current playback may advance
+   naturally or by manual navigation within the queue.
+
+Queue-change hints may repeat only during the pending append window. They never
+extend its twelve-second deadline or the first active-transition deadline.
+Outside that window a queue event retains ordinary cancellation behavior. Full
+readback retries stale pagination; a device command with uncertain delivery is
+never replayed. An automation append is additionally capped by the original
+playback end. Ordinary multipart loading uses the same transition policy without
+a service Stop timer.
+
 ## Active event rules
 
 Before this table, the callback validates the target player and continuity and
@@ -92,8 +122,8 @@ these rules and must not start another transition wait.
 | 3. `unexpected_play` | Play while expected state is not Play | `pass`; retain the observation hint if already waiting |
 | 4. `play_requires_observation` | Play while waiting | `observe`; the event does not confirm membership |
 | 5. `play_unchanged` | Otherwise expected Play | `ignore` |
-| 6. `transport_already_pending` | Stop/unknown during automation, already waiting | `ignore`; preserve the deadline |
-| 7. `transport_transition` | Stop/unknown during automation, not waiting | `wait`; establish the deadline and request observation |
+| 6. `transport_already_pending` | Stop/unknown during automation or multipart loading, already waiting | `ignore`; preserve the deadline |
+| 7. `transport_transition` | Stop/unknown during automation or multipart loading, not waiting | `wait`; establish the deadline and request observation |
 | Default: `event_not_attributed` | Anything else, including Pause and queue edits | `pass` to ordinary cancellation |
 
 State events report state, not who initiated a transition (5.4); a now-playing
@@ -106,8 +136,8 @@ that run first.
 
 ## Active observation rules
 
-An active policy needs an owned complete queue, active automation and expected
-Play. Stop/unknown starts a wait if none exists. So does Play with a hybrid
+An active policy needs an owned complete queue, active automation or multipart
+loading, and expected Play. Stop/unknown starts a wait if none exists. So does Play with a hybrid
 MID/QID: both identifiers occur in the owned queue, but in different entries.
 A hybrid pair permits waiting only.
 

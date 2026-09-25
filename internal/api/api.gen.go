@@ -479,18 +479,22 @@ type PlaybackAutomation struct {
 	TargetVolume    RequestedVolume `json:"target_volume"`
 }
 
-// PlaybackInput A concrete item from the items API. Omitting automation starts ordinary playback without a service stop timer. With automation, repeat must be off and the timeline begins after playback is confirmed. Preflight accepts the same body but performs no writes.
+// PlaybackInput Exactly one item_ref or an ordered item_refs list from the items API. Ordered plans require shuffle off, use 1-32 tracks or leaf containers from one local source, and contain at most 10000 tracks including repeats. All parts are resolved before admission. The first replaces the queue; subsequent parts append during playback with complete ordered readback. Omitting automation starts ordinary playback without a service stop timer. With automation, repeat must be off and the timeline begins after playback is confirmed. Preflight accepts the same body but performs no writes.
 //
 // Examples: {"automation":{"duration_seconds":60,"fade_seconds":5,"ramp_seconds":10,"target_volume":{"level":3,"unit":"heos"}},"initial_volume":{"level":2,"unit":"heos"},"item_ref":"replace-with-current-item-ref","queue_mode":"replace","repeat":"off","shuffle":false,"takeover":false}
 type PlaybackInput struct {
 	// Automation Optional bounded playback. Requires repeat off, initial <= target <= player ceiling, and ramp <= duration - fade with fade < duration. With takeover false, playing targets return 409; paused or stopped targets may start unless another operation owns the device. Natural transitions and manual Next/Previous within the complete unchanged queue preserve the original ramp, fade and stop deadline. POST /skip is not that path; without takeover it returns 409 while an operation owns the player, and takeover releases the run, including its stop timer, before navigating. Pause, volume, mute, mode, source, group or queue changes release ownership and remove the timer. During an active run, Stop or transient unknown suspends writes for up to twelve seconds, capped by the original stop deadline; fresh Play must confirm the unchanged queue, valid MID/QID and other controls before resuming. Repeated Stop does not extend the wait; persistent Stop releases without cleanup. Manual Stop then Play in this window may preserve the run, as HEOS cannot distinguish it from Next. Operator /stop cancels immediately.
-	Automation    *PlaybackAutomation    `json:"automation,omitempty"`
-	InitialVolume RequestedVolume        `json:"initial_volume"`
-	ItemRef       string                 `json:"item_ref"`
-	QueueMode     PlaybackInputQueueMode `json:"queue_mode"`
-	Repeat        PlaybackInputRepeat    `json:"repeat"`
-	Shuffle       bool                   `json:"shuffle"`
-	Takeover      bool                   `json:"takeover"`
+	Automation    *PlaybackAutomation `json:"automation,omitempty"`
+	InitialVolume RequestedVolume     `json:"initial_volume"`
+	ItemRef       *string             `json:"item_ref,omitempty"`
+
+	// ItemRefs Frozen part order, including repeats. Each container must directly contain playable local tracks in the requested order. Playlists must remain immutable while in use.
+	ItemRefs  []string               `json:"item_refs,omitempty"`
+	QueueMode PlaybackInputQueueMode `json:"queue_mode"`
+	Repeat    PlaybackInputRepeat    `json:"repeat"`
+	Shuffle   bool                   `json:"shuffle"`
+	Takeover  bool                   `json:"takeover"`
+	union     json.RawMessage
 }
 
 // PlaybackInputQueueMode defines model for PlaybackInput.QueueMode.
@@ -498,6 +502,14 @@ type PlaybackInputQueueMode string
 
 // PlaybackInputRepeat defines model for PlaybackInput.Repeat.
 type PlaybackInputRepeat string
+
+// PlaybackInput0 defines model for PlaybackInput.0.
+type PlaybackInput0 = interface{}
+
+// PlaybackInput1 defines model for PlaybackInput.1.
+type PlaybackInput1 struct {
+	Shuffle interface{} `json:"shuffle,omitempty"`
+}
 
 // PlaybackProgress defines model for PlaybackProgress.
 type PlaybackProgress struct {
@@ -517,6 +529,14 @@ type Preflight = control.Preflight
 
 // Queue Queue entries are not current-media evidence. Continuation uses Player.revision; any player revision change, including current-media changes, can cause stale_reference. Restart traversal from offset zero after stale_reference.
 type Queue = control.Queue
+
+// QueueLoadingProgress defines model for QueueLoadingProgress.
+type QueueLoadingProgress struct {
+	ConfirmedParts  int `json:"confirmed_parts"`
+	ConfirmedTracks int `json:"confirmed_tracks"`
+	TotalParts      int `json:"total_parts"`
+	TotalTracks     int `json:"total_tracks"`
+}
 
 // RequestedVolume defines model for RequestedVolume.
 type RequestedVolume struct {
@@ -695,6 +715,191 @@ type SetTransportJSONRequestBody = TransportInput
 
 // SetVolumeJSONRequestBody defines body for SetVolume for application/json ContentType.
 type SetVolumeJSONRequestBody = VolumeInput
+
+// AsPlaybackInput0 returns the union data inside the PlaybackInput as a PlaybackInput0
+func (t PlaybackInput) AsPlaybackInput0() (PlaybackInput0, error) {
+	var body PlaybackInput0
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromPlaybackInput0 overwrites any union data inside the PlaybackInput as the provided PlaybackInput0
+func (t *PlaybackInput) FromPlaybackInput0(v PlaybackInput0) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergePlaybackInput0 performs a merge with any union data inside the PlaybackInput, using the provided PlaybackInput0
+func (t *PlaybackInput) MergePlaybackInput0(v PlaybackInput0) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsPlaybackInput1 returns the union data inside the PlaybackInput as a PlaybackInput1
+func (t PlaybackInput) AsPlaybackInput1() (PlaybackInput1, error) {
+	var body PlaybackInput1
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromPlaybackInput1 overwrites any union data inside the PlaybackInput as the provided PlaybackInput1
+func (t *PlaybackInput) FromPlaybackInput1(v PlaybackInput1) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergePlaybackInput1 performs a merge with any union data inside the PlaybackInput, using the provided PlaybackInput1
+func (t *PlaybackInput) MergePlaybackInput1(v PlaybackInput1) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t PlaybackInput) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	object := make(map[string]json.RawMessage)
+	if t.union != nil {
+		err = json.Unmarshal(b, &object)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if t.Automation != nil {
+		object["automation"], err = json.Marshal(t.Automation)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'automation': %w", err)
+		}
+	}
+
+	object["initial_volume"], err = json.Marshal(t.InitialVolume)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'initial_volume': %w", err)
+	}
+
+	if t.ItemRef != nil {
+		object["item_ref"], err = json.Marshal(t.ItemRef)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'item_ref': %w", err)
+		}
+	}
+
+	if t.ItemRefs != nil {
+		object["item_refs"], err = json.Marshal(t.ItemRefs)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'item_refs': %w", err)
+		}
+	}
+
+	object["queue_mode"], err = json.Marshal(t.QueueMode)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'queue_mode': %w", err)
+	}
+
+	object["repeat"], err = json.Marshal(t.Repeat)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'repeat': %w", err)
+	}
+
+	object["shuffle"], err = json.Marshal(t.Shuffle)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'shuffle': %w", err)
+	}
+
+	object["takeover"], err = json.Marshal(t.Takeover)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'takeover': %w", err)
+	}
+
+	b, err = json.Marshal(object)
+	return b, err
+}
+
+func (t *PlaybackInput) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	if err != nil {
+		return err
+	}
+	object := make(map[string]json.RawMessage)
+	err = json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["automation"]; found {
+		err = json.Unmarshal(raw, &t.Automation)
+		if err != nil {
+			return fmt.Errorf("error reading 'automation': %w", err)
+		}
+	}
+
+	if raw, found := object["initial_volume"]; found {
+		err = json.Unmarshal(raw, &t.InitialVolume)
+		if err != nil {
+			return fmt.Errorf("error reading 'initial_volume': %w", err)
+		}
+	}
+
+	if raw, found := object["item_ref"]; found {
+		err = json.Unmarshal(raw, &t.ItemRef)
+		if err != nil {
+			return fmt.Errorf("error reading 'item_ref': %w", err)
+		}
+	}
+
+	if raw, found := object["item_refs"]; found {
+		err = json.Unmarshal(raw, &t.ItemRefs)
+		if err != nil {
+			return fmt.Errorf("error reading 'item_refs': %w", err)
+		}
+	}
+
+	if raw, found := object["queue_mode"]; found {
+		err = json.Unmarshal(raw, &t.QueueMode)
+		if err != nil {
+			return fmt.Errorf("error reading 'queue_mode': %w", err)
+		}
+	}
+
+	if raw, found := object["repeat"]; found {
+		err = json.Unmarshal(raw, &t.Repeat)
+		if err != nil {
+			return fmt.Errorf("error reading 'repeat': %w", err)
+		}
+	}
+
+	if raw, found := object["shuffle"]; found {
+		err = json.Unmarshal(raw, &t.Shuffle)
+		if err != nil {
+			return fmt.Errorf("error reading 'shuffle': %w", err)
+		}
+	}
+
+	if raw, found := object["takeover"]; found {
+		err = json.Unmarshal(raw, &t.Takeover)
+		if err != nil {
+			return fmt.Errorf("error reading 'takeover': %w", err)
+		}
+	}
+
+	return err
+}
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {

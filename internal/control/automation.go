@@ -83,7 +83,7 @@ func (c *Coordinator) checkOwnership(l *lane, r *execution) error {
 }
 
 func (c *Coordinator) automate(l *lane, r *execution, a Automation) error {
-	began := c.clock.Now()
+	began := r.playbackStarted
 	duration := time.Duration(a.DurationSeconds) * time.Second
 	ramp := time.Duration(a.RampSeconds) * time.Second
 	fade := time.Duration(a.FadeSeconds) * time.Second
@@ -93,6 +93,7 @@ func (c *Coordinator) automate(l *lane, r *execution, a Automation) error {
 	r.mu.Unlock()
 	defer func() { r.mu.Lock(); r.automating = false; r.mu.Unlock() }()
 	r.playbackDeadline = began.Add(duration)
+	r.appendUntil = began.Add(duration - fade)
 	r.progress = &PlaybackProgress{PlaybackStartedAt: began.UTC(), StopAt: began.Add(duration).UTC(), Level: initial}
 	last, fadeFrom := initial, -1
 	phase := ""
@@ -160,7 +161,20 @@ func (c *Coordinator) automate(l *lane, r *execution, a Automation) error {
 			}
 		}
 		if elapsed >= duration {
-			return c.write(l, r, heos.Mutation{Kind: heos.MutationKindTransport, State: heos.PlayStateStop})
+			if err := c.write(l, r, heos.Mutation{Kind: heos.MutationKindTransport, State: heos.PlayStateStop}); err != nil {
+				return err
+			}
+			if r.moreParts() {
+				return errQueueLoadingIncomplete
+			}
+			return nil
+		}
+		if r.moreParts() && c.clock.Now().Before(r.appendUntil) {
+			if err := c.appendNext(l, r); err != nil && !errors.Is(err, errPlaybackTimelineChanged) {
+				return err
+			}
+			phase = "" // Restore the envelope phase after the loading update.
+			continue   // Recompute elapsed time after append I/O.
 		}
 		if err := c.clock.Wait(r.ctx, min(250*time.Millisecond, duration-elapsed), r.wake); err != nil {
 			return err

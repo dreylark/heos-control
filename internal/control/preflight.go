@@ -21,7 +21,7 @@ func (s *Reads) Preflight(ctx context.Context, key string, cmd Command) (Preflig
 	if err != nil {
 		return Preflight{}, err
 	}
-	if cmd.Kind != CommandKindPlayback || cmd.ItemRef == "" || cmd.Level < 0 || cmd.Level > 100 || !cmd.Repeat.Known() {
+	if cmd.Kind != CommandKindPlayback || validatePlaybackSelection(cmd) != nil || cmd.Level < 0 || cmd.Level > 100 {
 		return Preflight{}, heos.ErrBounds
 	}
 	// Malformed automation is an input error; the configured ceiling is a separate
@@ -64,11 +64,7 @@ func (s *Reads) Preflight(ctx context.Context, key string, cmd Command) (Preflig
 	if len(result.Warnings) > 0 {
 		return result, nil
 	}
-	item, err := s.resolveItem(ctx, d, cmd.ItemRef)
-	if err != nil {
-		return Preflight{}, err
-	}
-	if _, err = playableMembers(ctx, d, item); err != nil {
+	if _, _, _, err := s.resolvePlayback(ctx, d, cmd); err != nil {
 		return Preflight{}, err
 	}
 	current, _ := s.Player(key)

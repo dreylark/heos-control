@@ -90,7 +90,10 @@ func decideQueueObservation(state queuePolicyState, facts queueObservationFacts)
 		waitUntil = facts.Now.Add(playbackConfirmationTimeout)
 	}
 	d := queueDecision{Action: queueWait, Rule: "media_pending", WaitUntil: waitUntil,
-		Deadline: minTime(waitUntil, state.PlaybackUntil)}
+		Deadline: waitUntil}
+	if !state.PlaybackUntil.IsZero() {
+		d.Deadline = minTime(waitUntil, state.PlaybackUntil)
+	}
 	var changed error
 	if active && !waitUntil.IsZero() {
 		if fields := transitionChanges(facts.Before, facts.Observed); len(fields) != 0 {

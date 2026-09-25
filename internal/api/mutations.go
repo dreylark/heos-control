@@ -35,7 +35,7 @@ func (s *Server) submit(ctx context.Context, player, key, match string, body any
 	return control.ProjectOperation(op), e
 }
 func playbackCommand(body PlaybackInput) control.Command {
-	cmd := control.Command{Kind: control.CommandKindPlayback, ItemRef: body.ItemRef, Level: body.InitialVolume.Level, Shuffle: body.Shuffle, Repeat: heos.Repeat(body.Repeat), Takeover: body.Takeover}
+	cmd := control.Command{Kind: control.CommandKindPlayback, ItemRef: value(body.ItemRef, ""), ItemRefs: body.ItemRefs, Level: body.InitialVolume.Level, Shuffle: body.Shuffle, Repeat: heos.Repeat(body.Repeat), Takeover: body.Takeover}
 	if a := body.Automation; a != nil {
 		cmd.Automation = &control.Automation{TargetLevel: a.TargetVolume.Level, RampSeconds: a.RampSeconds, DurationSeconds: a.DurationSeconds, FadeSeconds: a.FadeSeconds}
 	}

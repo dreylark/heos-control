@@ -193,6 +193,69 @@ player is rejected for bounded playback unless explicit takeover is allowed.
 The service confirms preparatory Stop when replacing currently playing media,
 then establishes the selected native queue and confirmed playback.
 
+## Ordered multipart playback
+
+Use `item_refs` instead of `item_ref` to load an ordered collection in one
+operation. Exactly one field is required. For example:
+
+```json
+{
+  "item_refs": ["first-playlist-reference", "second-playlist-reference"],
+  "queue_mode": "replace",
+  "shuffle": false,
+  "repeat": "off",
+  "initial_volume": {"unit": "heos", "level": 0},
+  "takeover": false
+}
+```
+
+The list accepts 1..32 references from one configured local music source. Each
+reference must resolve to a playable track or a leaf container whose direct
+children are playable tracks. Nested containers, empty parts, expired references
+and mixed sources are rejected before any device write. All parts are resolved
+within one 20-second read budget, with at most 10,000 tracks in total, including
+repeats. Existing request and journal JSON bounds also apply. Native shuffle must
+be off; clients wanting shuffled playback submit a fixed permutation. Repeated
+references and tracks are preserved in order.
+
+Clients choose part sizes and prepare immutable playlists in Gerbera. The service
+does not create playlists, sort a container, or infer its filesystem paths. Keep
+all playlists available while their entries can still be used by the speaker.
+Do not rewrite them after obtaining references. Preflight accepts this same body.
+
+The first part uses native replace-and-play (`aid=4`); later parts use append
+(`aid=3`). Complete readback confirms the exact sequence, preserved existing
+MID/QID entries, unique QIDs and current playback. An ACK alone is insufficient.
+Without automation, the operation finishes after all parts are confirmed and
+leaves playback running. With automation, its original timeline starts as soon
+as the first part is confirmed. Appends serialize with volume changes; elapsed
+time is recomputed after I/O, without extending the window or replaying missed
+steps. No further append starts at or after the fade boundary (or the Stop
+boundary when there is no fade).
+
+Operations expose `queue_loading` separately from `playback`:
+
+```json
+{
+  "total_parts": 3,
+  "confirmed_parts": 1,
+  "total_tracks": 130,
+  "confirmed_tracks": 30
+}
+```
+
+The counts represent the last durably confirmed parts, including on failure,
+release and history reads. An uncertain in-flight append may have changed the
+speaker beyond these counts. Single-item operations have `queue_loading: null`.
+If the playback window ends with unsent parts, the original fade/Stop completes
+and the operation fails with `queue_loading_incomplete`. Delivery uncertainty or
+lost ownership removes future writes instead of speculative cleanup. A restart
+retains the plan identity and counts but does not resume loading or automation.
+
+Persist and retry the **same entire body, key and precondition**. Changing the
+reference order under the same idempotency key conflicts. Do not submit each
+part as a separate playback operation.
+
 ## Ownership and intervention
 
 An accepted bounded run belongs to the service, independent of the client's

@@ -2,10 +2,15 @@ package heos
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/url"
 	"strconv"
+	"strings"
+	"unicode/utf8"
 )
 
 // Diagnostic fields follow Denon 3.2, 5 and 6.1. Use an allowlist, including
@@ -38,6 +43,19 @@ func diagnosticParams(params url.Values) slog.Value {
 				break
 			}
 		}
+	}
+	if values := params["aid"]; len(values) == 1 {
+		if aid, err := strconv.Atoi(values[0]); err == nil && aid >= 1 && aid <= 4 {
+			attrs = append(attrs, slog.Int("aid", aid))
+		}
+	}
+	for _, key := range []string{"cid", "mid"} {
+		values := params[key]
+		if len(values) != 1 || len(values[0]) == 0 || len(values[0]) > 4096 || !utf8.ValidString(values[0]) || strings.ContainsRune(values[0], '\x00') {
+			continue
+		}
+		digest := sha256.Sum256([]byte(values[0]))
+		attrs = append(attrs, slog.String(key+"_fingerprint", hex.EncodeToString(digest[:8])))
 	}
 	if start, end, err := parseRange(params.Get("range")); err == nil {
 		attrs = append(attrs, slog.Int("range_start", start), slog.Int("range_end", end))
@@ -84,8 +102,12 @@ func (c *Client) traceFrame(r Response, err error) {
 	if r.Result == "success" || r.Result == "fail" {
 		result = r.Result
 	}
-	c.cfg.Logger.Debug(name, "command", diagnosticCommand(r.Command), "params", diagnosticParams(r.Params),
-		"result", result, "pending", r.Pending, "payload_bytes", len(r.Payload), "generation", c.View().Token.Generation)
+	attrs := []any{"command", diagnosticCommand(r.Command), "params", diagnosticParams(r.Params),
+		"result", result, "pending", r.Pending, "payload_bytes", len(r.Payload), "generation", c.View().Token.Generation}
+	if r.Command == "browse/browse" && !r.Pending {
+		attrs = append(attrs, "browse_options", diagnosticBrowseOptions(r.Options))
+	}
+	c.cfg.Logger.Debug(name, attrs...)
 }
 
 func diagnosticError(err error) string {
@@ -121,4 +143,37 @@ func diagnosticDeviceError(err error) slog.Attr {
 		attrs = append(attrs, slog.Int("syserrno", *device.SystemCode))
 	}
 	return slog.Attr{Key: "device_error", Value: slog.GroupValue(attrs...)}
+}
+
+// Denon 4.4.4 option 21 describes the current browsed container, not its children.
+// Malformed/large optional metadata affects diagnostics only, never read acceptance.
+func diagnosticBrowseOptions(raw json.RawMessage) slog.Value {
+	result := func(state string, playable bool) slog.Value {
+		return slog.GroupValue(slog.String("state", state), slog.Bool("playable_container", playable))
+	}
+	if len(raw) == 0 || string(raw) == "null" {
+		return result("absent", false)
+	}
+	if len(raw) > 16*1024 {
+		return result("invalid", false)
+	}
+	var groups []struct {
+		Browse []struct {
+			ID int `json:"id"`
+		} `json:"browse"`
+	}
+	if err := json.Unmarshal(raw, &groups); err != nil || len(groups) > 64 {
+		return result("invalid", false)
+	}
+	count, playable := 0, false
+	for _, group := range groups {
+		count += len(group.Browse)
+		if count > 64 {
+			return result("invalid", false)
+		}
+		for _, option := range group.Browse {
+			playable = playable || option.ID == 21
+		}
+	}
+	return result("valid", playable)
 }

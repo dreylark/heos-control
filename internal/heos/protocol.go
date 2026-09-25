@@ -82,6 +82,8 @@ type Response struct {
 	Result  string
 	Params  url.Values
 	Payload json.RawMessage
+	// Options is retained only for bounded browse diagnostics. It never authorizes writes.
+	Options json.RawMessage
 	Event   bool
 	Pending bool
 	Token   Token
@@ -200,6 +202,7 @@ func decodeResponse(frame []byte) (Response, error) {
 			Message string `json:"message"`
 		} `json:"heos"`
 		Payload json.RawMessage `json:"payload"`
+		Options json.RawMessage `json:"options"`
 	}
 	if !utf8.Valid(frame) {
 		return Response{}, ErrProtocol
@@ -207,7 +210,7 @@ func decodeResponse(frame []byte) (Response, error) {
 	if err := json.Unmarshal(frame, &raw); err != nil {
 		return Response{}, fmt.Errorf("JSON frame: %w", ErrProtocol)
 	}
-	r := Response{Command: strings.TrimSpace(raw.HEOS.Command), Result: raw.HEOS.Result, Payload: raw.Payload}
+	r := Response{Command: strings.TrimSpace(raw.HEOS.Command), Result: raw.HEOS.Result, Payload: raw.Payload, Options: raw.Options}
 	r.Event = strings.HasPrefix(r.Command, "event/")
 	if r.Command == "" || (!r.Event && r.Result != "success" && r.Result != "fail") {
 		return Response{}, ErrProtocol

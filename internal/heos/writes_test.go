@@ -203,3 +203,52 @@ func TestLostWriteReplyRemainsUncertainAndIsNeverReplayed(t *testing.T) {
 		t.Fatal("write replayed", writes.Load())
 	}
 }
+
+// Appending uses aid=3; it must never become another queue replacement.
+func TestAppendTrackWireCommand(t *testing.T) {
+	track := Item{Source: "900", ContainerID: "folder/+%&", MediaID: "track/+%&", Playable: "yes", Type: "song"}
+	m := Mutation{Kind: MutationKindQueue, Player: "1", Item: track, Append: true}
+	name, args, err := m.command()
+	if err != nil || name != "browse/add_to_queue" || args.Get("aid") != "3" || args.Get("sid") != "900" || args.Get("cid") != string(track.ContainerID) || args.Get("mid") != string(track.MediaID) || len(args) != 5 {
+		t.Fatal(name, args, err)
+	}
+	for _, item := range []Item{
+		{Source: "900", ContainerID: "folder", MediaID: "track", Type: "song", Playable: "no"},
+		{Source: "900", ContainerID: "folder", Type: "song", Playable: "yes"},
+		{Source: "900", MediaID: "track", Type: "song", Playable: "yes"},
+	} {
+		m.Item = item
+		if _, _, err := m.command(); err == nil {
+			t.Fatalf("unsafe append accepted: %+v", item)
+		}
+	}
+}
+
+func TestAppendContainerOverPinnedTLS(t *testing.T) {
+	var writes atomic.Int32
+	server := newFakeHEOS(t, func(conn net.Conn, u *url.URL, _ int64) {
+		if commandName(u) == "browse/add_to_queue" {
+			writes.Add(1)
+			q := u.Query()
+			if q.Get("aid") != "3" || q.Get("cid") != "part/+%&" || q.Get("sid") != "900" || q.Has("mid") || len(q) != 5 || q.Get("SEQUENCE") == "" {
+				t.Error("incorrect container append", q)
+			}
+		}
+		sendReply(conn, u, nil, nil)
+	})
+	c, err := New(context.Background(), Config{Address: server.listener.Addr().String(), Fingerprint: server.pin, EnableWrites: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if _, err = c.Read(ctx, "player/get_players", nil); err != nil {
+		t.Fatal(err)
+	}
+	m := Mutation{Kind: MutationKindQueue, Player: "1", Append: true, Item: Item{Source: "900", ContainerID: "part/+%&", Container: "yes", Playable: "no"}}
+	_, err = c.Write(ctx, m, Guard{Token: c.observePlayer("1").Token, ExpiresAt: time.Now().Add(time.Second)})
+	if err != nil || writes.Load() != 1 {
+		t.Fatal(err, writes.Load())
+	}
+}
