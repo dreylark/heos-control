@@ -13,10 +13,11 @@ catalog reads, starts from Stop and Pause, muted preparation, explicit takeover
 of playing media, low-volume ramps, fades and final Stop. Local DLNA browsing
 and playback through Gerbera were exercised through the HEOS device.
 
-The recorded evidence does not identify a firmware build, so these findings are
-not a firmware compatibility matrix. Short low-volume checks do not qualify all
-levels, long-running playback, group behavior or other models. Other HEOS
-devices, including the AVC-X3800H, remain unverified and must not inherit the
+The earlier checks did not retain a firmware build; the separate native
+container checks below did. Neither set is a firmware compatibility matrix.
+Short low-volume checks do not qualify all levels, long-running playback,
+group behavior or other models. Other HEOS devices, including the AVC-X3800H,
+remain unverified and must not inherit the
 Home 150's volume policy. Configure a ceiling only after verifying the target;
 writes default off. See [Configuration](CONFIGURATION.md).
 
@@ -92,6 +93,99 @@ not retained. The permitted wait and rejection boundaries have synthetic
 regressions; that trace alone does not demonstrate successful end-to-end handling
 of every natural track transition. Unknown intermediate media IDs likewise do
 not establish where those IDs came from.
+
+### Native local container playback
+
+Separate checks on **Denon Home 150 firmware 3.139.170**, through pinned TLS at
+volume **0**, confirmed single-track playback and native queue replacement for
+an 11-track album, a 10-track generic folder, a 49-track genre container and a
+99-track artist collection. The generic folder reported `playable=no` in its
+parent listing and option 21 in its browse response (4.4.4).
+
+Two library-wide containers containing 199 tracks advertised option 21 and
+acknowledged native queue replacement, but left the queue unchanged beyond the
+service's 12-second confirmation window. One remained unchanged during a
+45-second observation. Tested changes to queue criteria, optional parameters
+and browsing on the same connection did not resolve these cases. Read-only
+event captures of official HEOS app playback confirmed sustained Play at volume
+0 with 199 queue entries. One capture matched all 199 All Audio MIDs and their
+metadata; that queue was already present in the initial snapshot, so its
+construction was not observed. Events do not expose the app's commands.
+
+A separate app packet capture contained encrypted TLS application data on TCP
+10101. Plaintext renderer HTTP on TCP 60006 contained only `GetPositionInfo`
+requests. Queue notifications reported 30 and then 199 entries, but the capture
+did not reveal the queue-changing command or its parameters. The encrypted
+payload size does not establish whether the app submitted a container or a list
+of tracks.
+
+Server-side captures separated successful catalog delivery from the native
+queue failure. Ordinary browsing requested 100 entries per DLNA call and
+received pages of 100 and 99. Native replacement requested 1000 entries in one
+`BrowseDirectChildren` call; Gerbera returned HTTP 200 with all 199 selected MIDs
+in a complete, parseable 317,046-byte SOAP body in approximately 0.8 seconds.
+The queue and Pause state still remained unchanged after twelve seconds.
+A separate official-app replacement produced the same 199-MID queue without
+any captured catalog request to Gerbera. That observation does not distinguish
+cached metadata from metadata supplied by the app.
+
+Documented single-track additions with `mid` and `aid=3` successfully extended
+an already playing queue while preserving its existing MID/QID prefix and
+current track, at volume 0. A sequential test confirmed 30 entries after about
+48 seconds and 109 entries before its 180-second test budget expired. This was
+a test deadline, not a rejected append; it did not qualify a complete 199-track
+load. Two subsequent three-track sequences with one final queue read each took
+about 4.1 seconds each. Moving readback to a group boundary therefore did not
+remove the substantial per-command latency. A separate `aid=3` addition of the
+whole 199-track container acknowledged success but left a one-track playing
+queue unchanged for more than twelve seconds. Neither parallel writes nor
+unconfirmed batch continuation is enabled by these diagnostic tests.
+
+A subsequent volume-0 check with a Gerbera virtual batch layout loaded the
+199-track collection through six leaf containers of 16, 45, 45, 45, 45 and 3
+tracks. Native `aid=4` started the first part; five `aid=3` container additions
+extended the queue from 16 to 61, 106, 151, 196 and finally 199 entries. Every
+addition preserved the existing MID/QID prefix, the current MID/QID pair and
+Play at volume 0; progress events continued advancing. Complete readbacks
+matched the ordered union of the browsed parts, without missing or duplicate
+MIDs. The five additions took approximately 7.5 seconds including confirmation,
+with each addition confirmed in approximately 1.3–1.4 seconds. This timing
+excludes starting the first part. Native success replies arrived before the
+queue changes and were not used as completion evidence. These direct CLI
+checks qualify this collection on the tested firmware. The public API now
+accepts an ordered `item_refs` plan for automatic multi-container loading; see
+[API usage](API_USAGE.md). That implementation has synthetic TLS coverage;
+these earlier direct CLI checks do not qualify the integrated controller path.
+
+A volume-0 check also qualified newly generated local-file M3U playlists on
+Gerbera 3.3.0. A temporary instance used a separate catalog and the same media
+mounted read-only; its standard playlist importer picked up fresh files after
+startup. One playlist reversed the 16 tracks of the first part; another arranged
+45 different tracks in a specified permutation. DLNA and HEOS browse results
+preserved both requested orders. Native `aid=4` started the reverse playlist,
+and one `aid=3` command appended all 45 tracks in approximately 1.3 seconds
+including confirmation. The complete 61-entry queue matched the ordered
+playlists, retaining the existing MID/QID prefix and current track. Next selected
+the expected second track; progress advanced on both played tracks without
+playback errors. Cleanup confirmed Stop, volume 0 and an empty test queue before
+removing the temporary server. This qualifies fresh immutable playlist containers
+with M3U import enabled; it does not qualify rewriting an existing playlist or
+loading all 199 tracks through one playlist command.
+
+Separate static analysis of **Android HEOS 3.139.350** identified a Play All
+handler that builds an explicit media list. Its native SDK has a Protobuf queue
+path that splits lists into Play/Add actions, with track metadata and playable
+resource URLs. A fast-response portion defaults to 30 entries; queue/message
+limits can be updated from the device. This is consistent with the captured
+30-to-199 queue notifications, but does not establish the iPhone app's exact
+commands or a workaround through the supported CLI. Protobuf message defaults
+do not establish a limit on DLNA SOAP response size.
+
+The cause of the failure after catalog delivery remains undetermined; these
+checks do not establish a track-count or response-size limit. An advertised
+playable container and a successful command reply do not confirm queue
+application. The service retains an uncertain outcome for an unconfirmed
+replacement and does not replay it automatically.
 
 ## Event semantics and failure limits
 

@@ -26,9 +26,12 @@ func (c *Coordinator) confirmReadback(l *lane, r *execution, m heos.Mutation, be
 	if scalarMutation(m) {
 		return c.confirmScalar(l, r, m)
 	}
-	ctx, cancel := context.WithTimeout(heos.WithObservationTrigger(r.ctx, "confirmation"), playbackConfirmationTimeout)
-	defer cancel()
 	deadline := c.clock.Now().Add(playbackConfirmationTimeout)
+	if m.Append && !r.playbackDeadline.IsZero() {
+		deadline = minTime(deadline, r.playbackDeadline)
+	}
+	ctx, cancel := context.WithTimeout(heos.WithObservationTrigger(r.ctx, "confirmation"), max(0, deadline.Sub(c.clock.Now())))
+	defer cancel()
 	reuse := false
 	lastQueueRule := ""
 	for {
@@ -50,6 +53,12 @@ func (c *Coordinator) confirmReadback(l *lane, r *execution, m heos.Mutation, be
 			c.traceSnapshot(r, "pending_readback", after)
 			switch m.Kind {
 			case heos.MutationKindQueue:
+				if m.Append {
+					if confirmed, err := c.appendObservation(ctx, l, r, before, after); confirmed || err != nil {
+						return after, err
+					}
+					break
+				}
 				d := c.queueStartObservation(ctx, l, r, before, after, deadline)
 				if c.logger != nil && d.Rule != lastQueueRule {
 					c.logger.Debug("queue start confirmation decision", "operation_id", r.id, "action", d.Action, "rule", d.Rule, "timeout_at", deadline)
@@ -108,6 +117,13 @@ func (c *Coordinator) queueStartObservation(ctx context.Context, l *lane, r *exe
 		Cancellation: context.Cause(ctx), Unsafe: deviceObservationSafety(l.device.Config, after),
 		PendingEvents: r.eventRevision != r.observedRevision,
 	})
+	if d.Action == queueStartConfirm && r.ordered != nil && !orderedQueue(after.Queue, r.ordered) {
+		if appendQueueProblem(heos.QueuePage{}, after.Queue, r.ordered) {
+			d = queueStartDecision{Action: queueStartAbort, Rule: "queue_order_changed", Err: ownershipMismatch("pending_readback_changed", []string{"queue_items"}, before, after)}
+		} else {
+			d = queueStartDecision{Action: queueStartWait, Rule: "queue_order_pending"}
+		}
+	}
 	if d.Action == queueStartAbort {
 		d.Err = r.captureDecision(d.Err, d.Rule, c.clock.Now())
 	}
@@ -136,6 +152,9 @@ func (r *execution) queueResultMatches(s heos.Snapshot) bool {
 }
 
 func (r *execution) queueResultProblem(s heos.Snapshot) string {
+	if r.ordered != nil && !orderedQueue(s.Queue, r.ordered) {
+		return "queue_incomplete_or_invalid"
+	}
 	return queueResultProblem(s, r.members, r.bounded)
 }
 

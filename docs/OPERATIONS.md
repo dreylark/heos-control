@@ -297,6 +297,22 @@ credentials, account/media labels, URLs and free-form device errors; opaque
 identity/media values use truncated fingerprints. Return to INFO after diagnosis.
 Collection and retention belong to the operator.
 
+Queue request diagnostics include the numeric `aid` and fixed-size
+`cid_fingerprint`/`mid_fingerprint` values when those IDs are present. Compare
+these fingerprints with the preceding browse requests to follow the selected
+container without disclosing its ID or name. Final browse responses include
+`browse_options.state` (`absent`, `valid`, or `invalid`) and
+`browse_options.playable_container`, reflecting HEOS option 21 for the currently
+browsed container. This is advertised capability, not confirmation that queue
+replacement will succeed. These fields are diagnostic only; they do not grant
+playback ownership or change admission. Malformed or oversized optional data is
+marked invalid without rejecting an otherwise valid response.
+
+When queue replacement is acknowledged but playback does not change, retain the
+DEBUG interval from catalog browsing through the operation's terminal result.
+Confirmation compares the observed queue and transport state; a successful
+native reply alone cannot establish that the requested queue was applied.
+
 ## Backup and restore
 
 Back up application tables, idempotency records, reservations, journal control

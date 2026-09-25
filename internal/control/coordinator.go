@@ -63,6 +63,7 @@ type Command struct {
 	Direction   string         `json:"direction,omitempty"`
 	Takeover    bool           `json:"takeover"`
 	ItemRef     string         `json:"item_ref"`
+	ItemRefs    []string       `json:"item_refs,omitempty"`
 	Shuffle     bool           `json:"shuffle"`
 	Repeat      heos.Repeat    `json:"repeat"`
 	Mode        string         `json:"mode"`
@@ -115,7 +116,13 @@ type execution struct {
 	inflight         bool
 	uncertain        bool
 	unconfirmed      bool
-	rejectedWrite    bool // worker-owned; read failures do not trigger write recovery
+	rejectedWrite    bool                  // worker-owned; read failures do not trigger write recovery
+	parts            []playbackPart        // immutable ordered plan; nil for legacy selection
+	ordered          []heos.ID             // worker-owned target queue for the pending part
+	queueLoading     *QueueLoadingProgress // worker-owned durable confirmed counts
+	loading          bool                  // protected by mu; active multipart queue loading
+	playbackStarted  time.Time             // worker-owned first confirmed playback
+	appendUntil      time.Time             // worker-owned; no append sends at/after fade
 	members          map[heos.ID]bool
 	confirmed        int
 	playbackDeadline time.Time           // worker-owned monotonic end of the envelope
@@ -310,6 +317,9 @@ func (c *Coordinator) Submit(ctx context.Context, request journal.Request, cmd C
 		return journal.Operation{}, heos.ErrBounds
 	}
 	// Freeze caller-owned optional settings before admitting asynchronous work.
+	if cmd.ItemRefs != nil {
+		cmd.ItemRefs = append([]string{}, cmd.ItemRefs...)
+	}
 	if cmd.Automation != nil {
 		settings := *cmd.Automation
 		cmd.Automation = &settings
@@ -342,16 +352,13 @@ func (c *Coordinator) Submit(ctx context.Context, request journal.Request, cmd C
 		return journal.Operation{}, heos.ErrBounds
 	}
 	var item heos.Item
+	var parts []playbackPart
 	members := map[heos.ID]bool{}
 	if cmd.Kind == CommandKindPlayback {
-		var e error
-		item, e = c.reads.resolveItem(ctx, l.device, cmd.ItemRef)
-		if e != nil {
-			return journal.Operation{}, e
-		}
-		members, e = playableMembers(ctx, l.device, item)
-		if e != nil {
-			return journal.Operation{}, e
+		var err error
+		item, members, parts, err = c.reads.resolvePlayback(ctx, l.device, cmd)
+		if err != nil {
+			return journal.Operation{}, err
 		}
 	}
 	old, e := c.db.Active(ctx, request.Player)
@@ -464,7 +471,7 @@ func (c *Coordinator) Submit(ctx context.Context, request journal.Request, cmd C
 		}
 	}
 	ids := make([]string, 0, len(members))
-	if cmd.Automation != nil {
+	if cmd.Automation != nil || len(parts) > 0 {
 		readctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		s, e = completeQueue(readctx, l, s)
 		cancel()
@@ -478,11 +485,12 @@ func (c *Coordinator) Submit(ctx context.Context, request journal.Request, cmd C
 	sort.Strings(ids)
 	memberBytes, _ := json.Marshal(ids)
 	args, _ := json.Marshal(struct {
-		MembersSHA256 string    `json:"members_sha256"`
-		Command       Command   `json:"command"`
-		Item          heos.Item `json:"resolved_item"`
-		VolumeCeiling *int      `json:"volume_ceiling"`
-	}{fmt.Sprintf("%x", sha256.Sum256(memberBytes)), cmd, item, l.device.Config.VolumeCeiling})
+		Plan          *playbackPlanIdentity `json:"ordered_plan,omitempty"`
+		MembersSHA256 string                `json:"members_sha256"`
+		Command       Command               `json:"command"`
+		Item          heos.Item             `json:"resolved_item"`
+		VolumeCeiling *int                  `json:"volume_ceiling"`
+	}{planIdentity(parts), fmt.Sprintf("%x", sha256.Sum256(memberBytes)), cmd, item, l.device.Config.VolumeCeiling})
 	if len(args) > journal.MaxJSONBytes {
 		return journal.Operation{}, heos.ErrBounds
 	}
@@ -524,7 +532,15 @@ func (c *Coordinator) Submit(ctx context.Context, request journal.Request, cmd C
 	if cmd.Kind == CommandKindCancel && previous != nil {
 		run.targetMetrics = previous.metrics
 	}
-	run.bounded = cmd.Automation != nil
+	run.bounded = cmd.Automation != nil || len(parts) > 0
+	run.parts = parts
+	if len(parts) > 0 {
+		run.ordered = append([]heos.ID(nil), parts[0].IDs...)
+		run.queueLoading = &QueueLoadingProgress{TotalParts: len(parts)}
+		for _, part := range parts {
+			run.queueLoading.TotalTracks += len(part.IDs)
+		}
+	}
 	if cmd.Kind == CommandKindCancel && cmd.Mode == "stop_owned" && previous != nil {
 		run.bounded = previous.bounded
 		previous.mu.Lock()

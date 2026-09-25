@@ -1474,7 +1474,13 @@ components:
       - error_code
       - outcome
       - playback
+      - queue_loading
       properties:
+        queue_loading:
+          description: Last durably confirmed ordered queue counts; null for single-item requests. An unconfirmed command can have changed the device despite these counts. Counts persist after cancellation and restart recovery.
+          oneOf:
+          - $ref: '#/components/schemas/QueueLoadingProgress'
+          - type: 'null'
         playback:
           description: Confirmed bounded playback timeline; null before confirmation and for short operations. Stop time is a deadline, not a device guarantee. Persists after ownership release.
           oneOf:
@@ -1702,8 +1708,29 @@ components:
           type: integer
           minimum: 0
           maximum: 60
+    QueueLoadingProgress:
+      type: object
+      additionalProperties: false
+      required: [total_parts, confirmed_parts, total_tracks, confirmed_tracks]
+      properties:
+        total_parts:
+          type: integer
+          minimum: 1
+          maximum: 32
+        confirmed_parts:
+          type: integer
+          minimum: 0
+          maximum: 32
+        total_tracks:
+          type: integer
+          minimum: 1
+          maximum: 10000
+        confirmed_tracks:
+          type: integer
+          minimum: 0
+          maximum: 10000
     PlaybackInput:
-      description: A concrete item from the items API. Omitting automation starts ordinary playback without a service stop timer. With automation, repeat must be off and the timeline begins after playback is confirmed. Preflight accepts the same body but performs no writes.
+      description: Exactly one item_ref or an ordered item_refs list from the items API. Ordered plans require shuffle off, use 1-32 tracks or leaf containers from one local source, and contain at most 10000 tracks including repeats. All parts are resolved before admission. The first replaces the queue; subsequent parts append during playback with complete ordered readback. Omitting automation starts ordinary playback without a service stop timer. With automation, repeat must be off and the timeline begins after playback is confirmed. Preflight accepts the same body but performs no writes.
       examples:
       - item_ref: replace-with-current-item-ref
         queue_mode: replace
@@ -1719,12 +1746,21 @@ components:
       type: object
       additionalProperties: false
       required:
-      - item_ref
       - queue_mode
       - shuffle
       - repeat
       - initial_volume
       - takeover
+      oneOf:
+      - required: [item_ref]
+        not:
+          required: [item_refs]
+      - required: [item_refs]
+        not:
+          required: [item_ref]
+        properties:
+          shuffle:
+            const: false
       properties:
         automation:
           $ref: '#/components/schemas/PlaybackAutomation'
@@ -1732,6 +1768,16 @@ components:
           type: string
           minLength: 1
           maxLength: 256
+        item_refs:
+          description: Frozen part order, including repeats. Each container must directly contain playable local tracks in the requested order. Playlists must remain immutable while in use.
+          type: array
+          minItems: 1
+          maxItems: 32
+          x-go-type-skip-optional-pointer: true
+          items:
+            type: string
+            minLength: 1
+            maxLength: 256
         queue_mode:
           type: string
           const: replace

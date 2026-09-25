@@ -45,11 +45,19 @@ func TestPlaybackWireOrderReadbackAndReplay(t *testing.T) {
 		hybridMedia                                   bool
 		loadingMID                                    string
 		nonPlayableContainer                          bool
+		ordered                                       bool
+		ignoreQueue                                   bool
 		invalidMember                                 string
 	}{
 		{name: "plain"},
+		{name: "ordered-parts", ordered: true},
+		{name: "ordered-parts-reply-first", ordered: true, replyFirst: true},
+		{name: "ordered-parts-bounded", ordered: true, bounded: true},
+		{name: "ordered-parts-bounded-reply-first", ordered: true, bounded: true, replyFirst: true},
 		{name: "non-playable-container", nonPlayableContainer: true},
 		{name: "non-playable-container-bounded", nonPlayableContainer: true, bounded: true},
+		{name: "non-playable-container-ignored-queue", nonPlayableContainer: true, retainedQueue: true, ignoreQueue: true},
+		{name: "non-playable-container-ignored-queue-bounded", nonPlayableContainer: true, retainedQueue: true, ignoreQueue: true, bounded: true},
 		{name: "non-playable-container-empty", nonPlayableContainer: true, invalidMember: "empty"},
 		{name: "non-playable-container-unplayable-leaf", nonPlayableContainer: true, invalidMember: "unplayable"},
 		{name: "non-playable-container-missing-mid", nonPlayableContainer: true, invalidMember: "missing-mid"},
@@ -122,6 +130,7 @@ func TestPlaybackWireOrderReadbackAndReplay(t *testing.T) {
 			loadingStopPending := false
 			delivery := newWireEventDelivery()
 			clock := &playbackWireClock{advancingClock: advancingClock{now: time.Now()}, delivery: delivery}
+			queueLength := 0
 			var playBegan time.Time
 			track, transitions := 0, 0
 			hybridPending, hybridReads := false, 0
@@ -293,6 +302,15 @@ func TestPlaybackWireOrderReadbackAndReplay(t *testing.T) {
 										params.Set("returned", "2")
 									}
 								}
+								if tc.ordered && playing {
+									items := []map[string]any{}
+									for i := range queueLength {
+										items = append(items, map[string]any{"sid": 1024, "mid": "track", "qid": i + 1})
+									}
+									payload = items
+									params.Set("count", strconv.Itoa(queueLength))
+									params.Set("returned", strconv.Itoa(queueLength))
+								}
 							case "browse/browse":
 								params.Set("count", "1")
 								params.Set("returned", "1")
@@ -384,8 +402,22 @@ func TestPlaybackWireOrderReadbackAndReplay(t *testing.T) {
 								events = append(events, map[string]string{"command": "event/player_volume_changed", "message": fmt.Sprintf("pid=1&level=%d&mute=%s", level, muted)})
 							case "browse/add_to_queue":
 								writes = append(writes, name)
+								if tc.ordered && queueLength > 0 {
+									if params.Get("aid") != "3" || params.Get("cid") != "green" || params.Has("mid") {
+										t.Error("incorrect native append", params)
+									}
+									queueLength++
+									events = append(events, map[string]string{"command": "event/player_queue_changed", "message": "pid=1"})
+									break
+								}
+								queueLength = 1
 								if level != 10 || params.Get("aid") != "4" || params.Get("cid") != "green" || params.Get("sid") != "900" {
 									t.Error("unsafe/wrong native queue replacement", params)
+								}
+								if tc.ignoreQueue {
+									// Reconstructed device behavior: success with no queue,
+									// media or state change, and no corresponding events.
+									break
 								}
 								playing, state = true, "play"
 								playBegan = clock.Now()
@@ -538,6 +570,11 @@ func TestPlaybackWireOrderReadbackAndReplay(t *testing.T) {
 			p, _ := reads.Player("room")
 			request := journal.Request{Principal: "operator", Player: "room", Key: "play", Method: "POST", Endpoint: "/v1/players/room/playback", IfMatch: fmt.Sprintf("%q", p.Revision), Body: json.RawMessage(`{"initial_volume":{"unit":"heos","level":10}}`)}
 			cmd := Command{Kind: CommandKindPlayback, Level: 10, ItemRef: page.Items[0].Ref, Shuffle: true, Repeat: heos.RepeatOff, Takeover: tc.playingInitially}
+			if tc.ordered {
+				cmd.ItemRefs = []string{cmd.ItemRef, cmd.ItemRef, cmd.ItemRef}
+				cmd.ItemRef = ""
+				cmd.Shuffle = false
+			}
 			if tc.bounded {
 				cmd.Automation = &Automation{TargetLevel: 12, RampSeconds: 1, DurationSeconds: 3, FadeSeconds: 1}
 				if tc.longHold {
@@ -587,7 +624,7 @@ func TestPlaybackWireOrderReadbackAndReplay(t *testing.T) {
 				t.Fatal(e)
 			}
 			o := awaitOperation(t, db, a.ID)
-			wantFailure := ignoreVolume || tc.failedVolumeReply || tc.volumeIntervention
+			wantFailure := ignoreVolume || tc.failedVolumeReply || tc.volumeIntervention || tc.ignoreQueue
 			if !wantFailure && o.State != journal.Succeeded {
 				mu.Lock()
 				failedRequests := append([]string(nil), requests...)
@@ -595,13 +632,20 @@ func TestPlaybackWireOrderReadbackAndReplay(t *testing.T) {
 				t.Fatalf("operation failed: %+v\nwire requests: %v", o, failedRequests)
 			}
 			if wantFailure && o.State == journal.Succeeded {
-				t.Fatal("false success after ignored/rejected/interrupted volume setter")
+				t.Fatal("false success after ignored/rejected/interrupted mutation")
 			}
 			if _, e = c.Submit(ctx, request, cmd); e != nil {
 				t.Fatal(e)
 			}
 			mu.Lock()
 			defer mu.Unlock()
+			if tc.ignoreQueue {
+				if playing || state != "stop" || level != 10 {
+					t.Fatal("unconfirmed queue changed playback or started automation", playing, state, level)
+				}
+				assertIgnoredQueueWireOutcome(t, o, writes, requests, requestTimes, clock.Now())
+				return
+			}
 			want := 1
 			if !wantFailure {
 				want = 4
@@ -620,6 +664,13 @@ func TestPlaybackWireOrderReadbackAndReplay(t *testing.T) {
 				want++
 				if len(writes) == 0 || writes[0] != "player/set_play_state" {
 					t.Fatal("takeover did not confirm stop first", writes)
+				}
+			}
+			if tc.ordered {
+				want += 2
+				progress := ProjectOperation(o).QueueLoading
+				if queueLength != 3 || progress == nil || progress.ConfirmedParts != 3 || progress.ConfirmedTracks != 3 {
+					t.Fatal(queueLength, string(o.Progress))
 				}
 			}
 			if len(writes) != want {
@@ -648,6 +699,43 @@ func TestPlaybackWireOrderReadbackAndReplay(t *testing.T) {
 				assertWireScalarNotConfirmed(t, requests, o, tc.failedVolumeReply)
 			}
 		})
+	}
+}
+
+func assertIgnoredQueueWireOutcome(t *testing.T, operation journal.Operation, writes, requests []string, requestTimes []time.Time, now time.Time) {
+	t.Helper()
+	if operation.State != journal.Uncertain || operation.ErrorCode != "device_unavailable" {
+		t.Fatalf("acknowledged queue without application: state=%s code=%s; want uncertain/device_unavailable", operation.State, operation.ErrorCode)
+	}
+	wantWrites := []string{"player/set_volume", "player/set_play_mode", "player/set_mute", "browse/add_to_queue"}
+	if !slices.Equal(writes, wantWrites) {
+		t.Fatal("unconfirmed queue caused replay, transport or automation writes", writes)
+	}
+	queueAt := slices.Index(requests, "browse/add_to_queue")
+	if queueAt < 0 || queueAt+1 >= len(requests) {
+		t.Fatal("fixture did not exercise queue confirmation", requests)
+	}
+	// The confirmation deadline starts after the reply and before its first
+	// GET. Bound it between those wire timestamps without assuming zero TLS I/O.
+	if now.Before(requestTimes[queueAt].Add(12*time.Second)) || now.After(requestTimes[queueAt+1].Add(12*time.Second)) {
+		t.Errorf("queue confirmation changed the twelve-second deadline: elapsed=%s", now.Sub(requestTimes[queueAt]))
+	}
+	readback := requests[queueAt+1:]
+	if len(readback) != 12*8 {
+		t.Errorf("queue confirmation sent %d requests; want twelve complete eight-command reads", len(readback))
+	}
+	previousQueueRead := time.Time{}
+	for i, request := range readback {
+		if !strings.Contains(request, "/get_") {
+			t.Errorf("queue confirmation sent an unexpected command: %s", request)
+		}
+		if request == "player/get_queue" {
+			at := requestTimes[queueAt+1+i]
+			if !previousQueueRead.IsZero() && at.Sub(previousQueueRead) < time.Second {
+				t.Error("unchanged queue caused early confirmation polling", at.Sub(previousQueueRead))
+			}
+			previousQueueRead = at
+		}
 	}
 }
 

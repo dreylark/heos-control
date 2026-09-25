@@ -11,8 +11,8 @@ import (
 )
 
 func (c *Coordinator) transition(ctx context.Context, r *execution, u journal.Update) error {
-	if r.progress != nil {
-		u.Progress, _ = json.Marshal(r.progress)
+	if r.progress != nil || r.queueLoading != nil {
+		u.Progress, _ = json.Marshal(operationProgress{PlaybackProgress: r.progress, QueueLoading: r.queueLoading})
 	}
 	o, e := c.db.Transition(ctx, r.op.ID, r.op.Revision, u)
 	if e != nil { // Resolve the journal write, never repeat a HEOS command.
@@ -77,6 +77,9 @@ func (c *Coordinator) writeOnce(l *lane, r *execution, m heos.Mutation) (err err
 	if waited && m.Kind == heos.MutationKindVolume {
 		return errPlaybackTimelineChanged
 	}
+	if m.Append && !r.appendUntil.IsZero() && !c.clock.Now().Before(r.appendUntil) {
+		return errPlaybackTimelineChanged
+	}
 	if r.automating && m.Kind == heos.MutationKindVolume && m.Level > 0 && !c.clock.Now().Before(r.playbackDeadline) {
 		return errPlaybackTimelineChanged
 	}
@@ -107,6 +110,13 @@ func (c *Coordinator) writeOnce(l *lane, r *execution, m heos.Mutation) (err err
 		return fmt.Errorf("journal unavailable: %w", e)
 	}
 	guardDuration := 5 * time.Second
+	if m.Append && !r.appendUntil.IsZero() {
+		remaining := r.appendUntil.Sub(c.clock.Now())
+		if remaining <= 0 {
+			return errPlaybackTimelineChanged
+		}
+		guardDuration = min(guardDuration, remaining)
+	}
 	if r.automating && m.Kind == heos.MutationKindVolume && m.Level > 0 {
 		remaining := r.playbackDeadline.Sub(c.clock.Now())
 		if remaining <= 0 {
@@ -220,6 +230,8 @@ func (c *Coordinator) execute(l *lane, r *execution, cmd Command, item heos.Item
 	budget := time.Duration(cmd.FadeSeconds+30) * time.Second
 	if cmd.Automation != nil {
 		budget += time.Duration(cmd.Automation.DurationSeconds) * time.Second
+	} else if len(r.parts) > 0 {
+		budget += time.Duration(len(r.parts)) * playbackConfirmationTimeout
 	}
 	ctx, cancel := context.WithTimeout(r.ctx, budget)
 	defer cancel()
@@ -239,6 +251,8 @@ func (c *Coordinator) execute(l *lane, r *execution, cmd Command, item heos.Item
 		e = c.startPlayback(l, r, cmd, item)
 		if e == nil && cmd.Automation != nil {
 			e = c.automate(l, r, *cmd.Automation)
+		} else if e == nil {
+			e = c.loadRemaining(l, r)
 		}
 	case CommandKindStop, CommandKindCancel:
 		if cmd.Kind == CommandKindCancel && cmd.Mode == "release" {
@@ -296,6 +310,9 @@ func (c *Coordinator) execute(l *lane, r *execution, cmd Command, item heos.Item
 		}
 		if errors.Is(e, heos.ErrRejected) {
 			code, outcome = "device_rejected", "rejected"
+		}
+		if errors.Is(e, errQueueLoadingIncomplete) {
+			code, outcome = "queue_loading_incomplete", "confirmed"
 		}
 		if errors.Is(e, ErrNotSkippable) {
 			code = "not_skippable"

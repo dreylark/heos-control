@@ -21,6 +21,7 @@ type Mutation struct {
 	Repeat    Repeat
 	Shuffle   bool
 	Item      Item
+	Append    bool // Queue only: append a resolved track or container without restarting playback.
 }
 
 func (m Mutation) command() (string, url.Values, error) {
@@ -83,6 +84,9 @@ func (m Mutation) command() (string, url.Values, error) {
 		a.Set("sid", string(i.Source))
 		a.Set("cid", string(i.ContainerID))
 		a.Set("aid", "4")
+		if m.Append {
+			a.Set("aid", "3")
+		}
 		if i.Container != "yes" {
 			a.Set("mid", string(i.MediaID))
 		}

@@ -209,3 +209,72 @@ func TestMutationHeadersAndJournalErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestOrderedPlaybackSelectionContract(t *testing.T) {
+	for _, tc := range []struct {
+		selection string
+		shuffle   bool
+		code      int
+	}{
+		{`"item_refs":["third","first","third"]`, false, 202},
+		{`"item_ref":"first"`, true, 202},
+		{`"item_refs":[]`, false, 400},
+		{`"item_refs":[""]`, false, 400},
+		{`"item_refs":["first"],"item_ref":"first"`, false, 400},
+		{`"item_refs":["first"]`, true, 400},
+	} {
+		t.Run(tc.selection, func(t *testing.T) {
+			s := testAPI(t)
+			s.credentials[0].Scopes = []string{"operator"}
+			submit := &captureSubmitter{}
+			s.SetCoordinator(submit)
+			shuffle := "false"
+			if tc.shuffle {
+				shuffle = "true"
+			}
+			body := `{` + tc.selection + `,"queue_mode":"replace","shuffle":` + shuffle + `,"repeat":"off","initial_volume":{"unit":"heos","level":0},"takeover":false}`
+			req := httptest.NewRequest("POST", "/v1/players/room/playback", strings.NewReader(body))
+			req.Header.Set("Authorization", "Bearer "+testToken)
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Idempotency-Key", "ordered")
+			req.Header.Set("If-Match", `"revision"`)
+			w := httptest.NewRecorder()
+			s.Handler().ServeHTTP(w, req)
+			if w.Code != tc.code {
+				t.Fatal(w.Code, w.Body)
+			}
+			if tc.code == 202 && tc.shuffle && submit.cmd.ItemRef != "first" {
+				t.Fatal("single-item mapping changed", submit.cmd)
+			}
+			if tc.code == 202 && !tc.shuffle {
+				if len(submit.cmd.ItemRefs) != 3 || submit.cmd.ItemRefs[0] != "third" || submit.cmd.ItemRefs[1] != "first" || submit.cmd.ItemRefs[2] != "third" {
+					t.Fatal(submit.cmd)
+				}
+				if strings.Contains(string(submit.request.Body), `"item_ref":`) || !strings.Contains(string(submit.request.Body), `"item_refs":["third","first","third"]`) {
+					t.Fatal(string(submit.request.Body))
+				}
+			}
+			if ok, errs := s.validator.ValidateHttpResponse(req, w.Result()); !ok {
+				t.Fatal(errs)
+			}
+		})
+	}
+}
+
+func TestQueueLoadingProgressResponseContract(t *testing.T) {
+	s := testAPI(t)
+	j := s.journal.(readJournal)
+	s.credentials[0].Principal = j.op.Principal
+	j.op.Progress = json.RawMessage(`{"queue_loading":{"total_parts":3,"confirmed_parts":1,"total_tracks":130,"confirmed_tracks":30}}`)
+	s.journal = j
+	req := httptest.NewRequest("GET", "/v1/operations/op", nil)
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, req)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"confirmed_tracks":30`) || !strings.Contains(w.Body.String(), `"playback":null`) {
+		t.Fatal(w.Code, w.Body)
+	}
+	if ok, errs := s.validator.ValidateHttpResponse(req, w.Result()); !ok {
+		t.Fatal(errs)
+	}
+}

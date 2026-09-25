@@ -26,5 +26,6 @@ func (c *Coordinator) startPlayback(l *lane, r *execution, cmd Command, item heo
 			return err
 		}
 	}
-	return nil
+	r.playbackStarted = c.clock.Now()
+	return c.confirmPart(r)
 }

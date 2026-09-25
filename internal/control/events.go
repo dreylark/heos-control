@@ -70,7 +70,7 @@ func (r *execution) event(e heos.Event) {
 // Call these attribution helpers with r.mu held, for a non-gap target event.
 func (r *execution) acceptQueueEvent(e heos.Event) bool {
 	d := decideQueueEvent(queuePolicyState{
-		Owned: r.queueOwned, Automating: r.automating,
+		Owned: r.queueOwned, Automating: r.automating || r.loading,
 		ExpectedState: r.expected.State, WaitUntil: r.queueWait,
 	}, e, r.now())
 	r.queueWait = d.WaitUntil
@@ -196,6 +196,13 @@ func (r *execution) expect(m heos.Mutation) {
 		}
 		add("event/shuffle_mode_changed", map[string]string{"shuffle": shuffle})
 	case heos.MutationKindQueue:
+		if m.Append {
+			// Notifications carry no origin. Keep the bounded queue hint until
+			// complete prefix/suffix readback; active media policy handles Next.
+			r.keepExpectations = true
+			add("event/player_queue_changed", map[string]string{})
+			return
+		}
 		r.queueStart = queueAwaitingPlay
 		add("event/player_queue_changed", map[string]string{})
 		add("event/player_now_playing_changed", map[string]string{})

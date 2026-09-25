@@ -163,6 +163,7 @@ go test ./internal/control -run='^$' -fuzz='^FuzzQueueTransitionPolicy$' \
 | `internal/heos` | `FuzzHEOSEventProjection` | Event decoding/projection and incomplete evidence |
 | `internal/control` | `FuzzQueueStartPolicy` | Initial queue confirmation |
 | `internal/control` | `FuzzQueueTransitionPolicy` | Owned queue transitions and fixed deadlines |
+| `internal/control` | `FuzzOrderedQueueAppend` | Ordered repeats, preserved prefixes and partial suffixes |
 
 For policy/protocol changes, run the related seeds and a bounded campaign for
 each affected target. These structured mutations are bounded to 4 KiB inputs,
