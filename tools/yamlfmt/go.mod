@@ -5,7 +5,7 @@ go 1.27.1
 tool github.com/google/yamlfmt/cmd/yamlfmt
 
 require (
-	github.com/bmatcuk/doublestar/v4 v4.10.0 // indirect
+	github.com/bmatcuk/doublestar/v4 v4.10.2 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/yamlfmt v0.21.0 // indirect
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
