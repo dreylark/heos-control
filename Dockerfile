@@ -11,7 +11,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     make verify && mkdir -p /out && \
     go test -race -tags=integration -c -o /out/journal.test ./internal/journal
 
-FROM debian:trixie-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132 AS integration-base
+FROM debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a AS integration-base
 WORKDIR /tests
 USER 10001:10001
 ENTRYPOINT ["/tests/journal.test"]
