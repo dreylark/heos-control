@@ -1,5 +1,5 @@
 # The runner contains source and the pinned toolchain, never compilation caches.
-FROM golang:1.27.3-trixie@sha256:c65ecfe613b539ac74c62a4c3b2c27e8f8a6076384c8f27e8a3c0f3be17cc385 AS runner
+FROM golang:1.27.3-trixie@sha256:af1bfc2614ebb1dbd31af514b78740fd678850e76498762b425ecee4c5c6ea80 AS runner
 WORKDIR /src
 COPY . .
 
@@ -11,7 +11,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     make verify && mkdir -p /out && \
     go test -race -tags=integration -c -o /out/journal.test ./internal/journal
 
-FROM debian:trixie-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4 AS integration-base
+FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2 AS integration-base
 WORKDIR /tests
 USER 10001:10001
 ENTRYPOINT ["/tests/journal.test"]
