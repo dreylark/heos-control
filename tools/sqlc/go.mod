@@ -1,6 +1,6 @@
 module github.com/dreylark/heos-control/tools/sqlc
 
-go 1.27.1
+go 1.27.4
 
 tool github.com/sqlc-dev/sqlc/cmd/sqlc
 

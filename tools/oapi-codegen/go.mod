@@ -1,6 +1,6 @@
 module github.com/dreylark/heos-control/tools/oapi-codegen
 
-go 1.27.1
+go 1.27.4
 
 tool github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen
 
@@ -9,7 +9,7 @@ require (
 	github.com/getkin/kin-openapi v0.153.0 // indirect
 	github.com/go-openapi/jsonpointer v1.0.2 // indirect
 	github.com/kr/pretty v0.1.0 // indirect
-	github.com/oapi-codegen/oapi-codegen/v2 v2.8.2 // indirect
+	github.com/oapi-codegen/oapi-codegen/v2 v2.8.3-0.20261103143049-c6c549f82841 // indirect
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3 // indirect
 	github.com/speakeasy-api/jsonpath v0.7.1 // indirect
 	github.com/speakeasy-api/openapi v1.25.7-0.20261016002657-683982d5baaf // indirect
